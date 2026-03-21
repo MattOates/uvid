@@ -1,0 +1,16 @@
+/target
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.eggs
+dist
+*.so
+*.dylib
+*.dll
+*.dSYM/
+.venv
+venv
+.idea
+.DS_Store
+*.uvid

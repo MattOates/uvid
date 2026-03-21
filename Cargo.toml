@@ -1,0 +1,21 @@
+[package]
+name = "uvid"
+version = "0.1.0"
+edition = "2021"
+authors = ["Matt E. Oates <mattoates+support@gmail.com>"]
+description = "Universal Variant ID - compact 128-bit identifiers for human genetic variation"
+license = "Apache-2.0"
+
+[lib]
+name = "uvid"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.28", features = ["extension-module"] }
+noodles = { version = "0.108", features = ["vcf", "bgzf"] }
+duckdb = { version = "1.10500", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
