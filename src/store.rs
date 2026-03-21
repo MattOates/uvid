@@ -92,7 +92,7 @@ impl UvidStore {
         // Create sites table
         self.conn.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS \"{}\" (
-                uvid HUGEINT PRIMARY KEY,
+                uvid UHUGEINT PRIMARY KEY,
                 qual FLOAT,
                 filter VARCHAR,
                 info JSON,
@@ -101,14 +101,28 @@ impl UvidStore {
             sites_table,
         ))?;
 
-        // Bulk insert sites
+        // Bulk insert sites via staging table to handle duplicates gracefully.
+        // DuckDB's Appender doesn't support ON CONFLICT, so we load into a
+        // temp table first, then merge with INSERT OR IGNORE.
         {
-            let mut appender = self.conn.appender(&sites_table)?;
+            let staging = format!("{}_staging", sites_table);
+            self.conn.execute_batch(&format!(
+                "CREATE TEMPORARY TABLE \"{}\" (
+                    uvid UHUGEINT,
+                    qual FLOAT,
+                    filter VARCHAR,
+                    info JSON,
+                    multiallelic BOOLEAN
+                )",
+                staging,
+            ))?;
+
+            let mut appender = self.conn.appender(&staging)?;
             for site in &parsed.sites {
-                let uvid_i128 = site.uvid.as_u128() as i128;
+                let uvid_u128 = site.uvid.as_u128();
                 let info_str = site.info.to_string();
                 appender.append_row(params![
-                    uvid_i128,
+                    uvid_u128,
                     site.qual,
                     site.filter,
                     info_str,
@@ -116,6 +130,13 @@ impl UvidStore {
                 ])?;
             }
             appender.flush()?;
+
+            self.conn.execute_batch(&format!(
+                "INSERT OR IGNORE INTO \"{}\" SELECT * FROM \"{}\"",
+                sites_table, staging,
+            ))?;
+            self.conn
+                .execute_batch(&format!("DROP TABLE \"{}\"", staging,))?;
         }
 
         // Register sites table in _meta
@@ -138,7 +159,7 @@ impl UvidStore {
 
             self.conn.execute_batch(&format!(
                 "CREATE TABLE IF NOT EXISTS \"{}\" (
-                    uvid HUGEINT PRIMARY KEY,
+                    uvid UHUGEINT PRIMARY KEY,
                     allele1 UTINYINT,
                     allele2 UTINYINT,
                     phased BOOLEAN,
@@ -149,18 +170,32 @@ impl UvidStore {
                 sample_table,
             ))?;
 
-            // Bulk insert sample records
+            // Bulk insert sample records via staging to handle duplicates
             {
-                let mut appender = self.conn.appender(&sample_table)?;
+                let staging = format!("{}_staging", sample_table);
+                self.conn.execute_batch(&format!(
+                    "CREATE TEMPORARY TABLE \"{}\" (
+                        uvid UHUGEINT,
+                        allele1 UTINYINT,
+                        allele2 UTINYINT,
+                        phased BOOLEAN,
+                        dp USMALLINT,
+                        gq UTINYINT,
+                        format_extra JSON
+                    )",
+                    staging,
+                ))?;
+
+                let mut appender = self.conn.appender(&staging)?;
                 for record in &parsed.samples[sample_idx] {
-                    let uvid_i128 = record.uvid.as_u128() as i128;
+                    let uvid_u128 = record.uvid.as_u128();
                     let format_extra_str = if record.format_extra.is_null() {
                         None
                     } else {
                         Some(record.format_extra.to_string())
                     };
                     appender.append_row(params![
-                        uvid_i128,
+                        uvid_u128,
                         record.allele1,
                         record.allele2,
                         record.phased,
@@ -170,6 +205,13 @@ impl UvidStore {
                     ])?;
                 }
                 appender.flush()?;
+
+                self.conn.execute_batch(&format!(
+                    "INSERT OR IGNORE INTO \"{}\" SELECT * FROM \"{}\"",
+                    sample_table, staging,
+                ))?;
+                self.conn
+                    .execute_batch(&format!("DROP TABLE \"{}\"", staging,))?;
             }
 
             // Register sample table in _meta
@@ -229,7 +271,10 @@ impl UvidStore {
         Ok(result)
     }
 
-    /// Query variants in a genomic region from a sample table.
+    /// Query variants in a genomic region.
+    ///
+    /// Supports both sample tables (with genotype data joined to sites)
+    /// and sites-only tables (e.g. ClinVar).
     pub fn search_region(
         &self,
         table_name: &str,
@@ -239,54 +284,94 @@ impl UvidStore {
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
         let (lower, upper) = Uvid128::range(chr, start_pos, end_pos);
 
-        let query = format!(
-            "SELECT s.uvid, s.allele1, s.allele2, s.phased, s.dp, s.gq, s.format_extra,
-                    site.qual, site.filter, site.info, site.multiallelic
-             FROM \"{}\" s
-             LEFT JOIN \"{}\" site ON s.uvid = site.uvid
-             WHERE s.uvid BETWEEN ? AND ?
-             ORDER BY s.uvid",
-            table_name,
-            table_name.replace(
+        let lower_u128 = lower.as_u128();
+        let upper_u128 = upper.as_u128();
+
+        let is_sites_table = table_name.ends_with("__sites");
+
+        if is_sites_table {
+            // Sites-only query: no genotype columns
+            let query = format!(
+                "SELECT uvid, qual, filter, info, multiallelic
+                 FROM \"{}\"
+                 WHERE uvid BETWEEN ? AND ?
+                 ORDER BY uvid",
+                table_name,
+            );
+
+            let mut stmt = self.conn.prepare(&query)?;
+            let rows = stmt.query_map(params![lower_u128, upper_u128], |row| {
+                let uvid_u128: u128 = row.get(0)?;
+                Ok(SearchResult {
+                    uvid: Uvid128::from_u128(uvid_u128),
+                    allele1: None,
+                    allele2: None,
+                    phased: None,
+                    dp: None,
+                    gq: None,
+                    format_extra: Value::Null,
+                    qual: row.get(1)?,
+                    filter: row.get(2)?,
+                    info: row
+                        .get::<_, Option<String>>(3)?
+                        .map(|s| serde_json::from_str(&s).unwrap_or(Value::Null))
+                        .unwrap_or(Value::Null),
+                    multiallelic: row.get(4)?,
+                })
+            })?;
+
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row?);
+            }
+            Ok(results)
+        } else {
+            // Sample table query: join with sites table for full data
+            let sites_table = table_name.replace(
                 &format!("__{}", table_name.rsplit("__").next().unwrap_or("")),
                 "__sites",
-            ),
-        );
+            );
 
-        // This is a simplified approach; the join table name derivation
-        // should be done more robustly in practice
-        let lower_i128 = lower.as_u128() as i128;
-        let upper_i128 = upper.as_u128() as i128;
+            let query = format!(
+                "SELECT s.uvid, s.allele1, s.allele2, s.phased, s.dp, s.gq, s.format_extra,
+                        site.qual, site.filter, site.info, site.multiallelic
+                 FROM \"{}\" s
+                 LEFT JOIN \"{}\" site ON s.uvid = site.uvid
+                 WHERE s.uvid BETWEEN ? AND ?
+                 ORDER BY s.uvid",
+                table_name, sites_table,
+            );
 
-        let mut stmt = self.conn.prepare(&query)?;
-        let rows = stmt.query_map(params![lower_i128, upper_i128], |row| {
-            let uvid_i128: i128 = row.get(0)?;
-            Ok(SearchResult {
-                uvid: Uvid128::from_u128(uvid_i128 as u128),
-                allele1: row.get(1)?,
-                allele2: row.get(2)?,
-                phased: row.get(3)?,
-                dp: row.get(4)?,
-                gq: row.get(5)?,
-                format_extra: row
-                    .get::<_, Option<String>>(6)?
-                    .map(|s| serde_json::from_str(&s).unwrap_or(Value::Null))
-                    .unwrap_or(Value::Null),
-                qual: row.get(7)?,
-                filter: row.get(8)?,
-                info: row
-                    .get::<_, Option<String>>(9)?
-                    .map(|s| serde_json::from_str(&s).unwrap_or(Value::Null))
-                    .unwrap_or(Value::Null),
-                multiallelic: row.get(10)?,
-            })
-        })?;
+            let mut stmt = self.conn.prepare(&query)?;
+            let rows = stmt.query_map(params![lower_u128, upper_u128], |row| {
+                let uvid_u128: u128 = row.get(0)?;
+                Ok(SearchResult {
+                    uvid: Uvid128::from_u128(uvid_u128),
+                    allele1: row.get(1)?,
+                    allele2: row.get(2)?,
+                    phased: row.get(3)?,
+                    dp: row.get(4)?,
+                    gq: row.get(5)?,
+                    format_extra: row
+                        .get::<_, Option<String>>(6)?
+                        .map(|s| serde_json::from_str(&s).unwrap_or(Value::Null))
+                        .unwrap_or(Value::Null),
+                    qual: row.get(7)?,
+                    filter: row.get(8)?,
+                    info: row
+                        .get::<_, Option<String>>(9)?
+                        .map(|s| serde_json::from_str(&s).unwrap_or(Value::Null))
+                        .unwrap_or(Value::Null),
+                    multiallelic: row.get(10)?,
+                })
+            })?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row?);
+            }
+            Ok(results)
         }
-        Ok(results)
     }
 
     /// Execute a raw SQL query (for advanced use / debugging).

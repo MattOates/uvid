@@ -43,3 +43,6 @@ uvid = "uvid.cli:app"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "uvid._core"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
