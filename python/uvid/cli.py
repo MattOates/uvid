@@ -1,7 +1,7 @@
 """UVID CLI - command-line interface for managing .uvid collections."""
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 
@@ -16,20 +16,26 @@ app = typer.Typer(
 
 @app.command()
 def add(
-    vcf_path: Path = typer.Argument(..., help="Path to VCF file (.vcf or .vcf.gz)"),
     collection: Path = typer.Argument(..., help="Path to .uvid collection file"),
+    vcf_paths: List[Path] = typer.Argument(
+        ..., help="Path(s) to VCF file(s) (.vcf or .vcf.gz)"
+    ),
     assembly: str = typer.Option(
         "GRCh38", "--assembly", "-a", help="Genome assembly (GRCh37, GRCh38)"
     ),
 ):
-    """Add a VCF file to a .uvid collection."""
-    if not vcf_path.exists():
-        typer.echo(f"Error: VCF file not found: {vcf_path}", err=True)
-        raise typer.Exit(1)
+    """Add one or more VCF files to a .uvid collection."""
+    for vcf_path in vcf_paths:
+        if not vcf_path.exists():
+            typer.echo(f"Error: VCF file not found: {vcf_path}", err=True)
+            raise typer.Exit(1)
 
     store = Collection(str(collection))
-    typer.echo(f"Adding {vcf_path.name} to {collection.name} (assembly: {assembly})...")
-    store.add_vcf(str(vcf_path), assembly)
+    for vcf_path in vcf_paths:
+        typer.echo(
+            f"Adding {vcf_path.name} to {collection.name} (assembly: {assembly})..."
+        )
+        store.add_vcf(str(vcf_path), assembly)
     typer.echo("Done.")
 
 

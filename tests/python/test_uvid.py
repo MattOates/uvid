@@ -537,14 +537,14 @@ class TestCLIAddAndQuery:
     def test_add_vcf(self, collection_path):
         if not TEST_VCF.exists():
             pytest.skip("Test VCF not found")
-        result = runner.invoke(app, ["add", str(TEST_VCF), collection_path])
+        result = runner.invoke(app, ["add", collection_path, str(TEST_VCF)])
         assert result.exit_code == 0
         assert "Done." in result.output
 
     def test_info(self, collection_path):
         if not TEST_VCF.exists():
             pytest.skip("Test VCF not found")
-        runner.invoke(app, ["add", str(TEST_VCF), collection_path])
+        runner.invoke(app, ["add", collection_path, str(TEST_VCF)])
         result = runner.invoke(app, ["info", collection_path])
         assert result.exit_code == 0
         assert "Collection:" in result.output
@@ -553,7 +553,7 @@ class TestCLIAddAndQuery:
     def test_samples(self, collection_path):
         if not TEST_VCF.exists():
             pytest.skip("Test VCF not found")
-        runner.invoke(app, ["add", str(TEST_VCF), collection_path])
+        runner.invoke(app, ["add", collection_path, str(TEST_VCF)])
         result = runner.invoke(app, ["samples", collection_path])
         assert result.exit_code == 0
         assert "Table" in result.output or "No samples" in result.output
@@ -561,7 +561,7 @@ class TestCLIAddAndQuery:
     def test_search(self, collection_path):
         if not TEST_VCF.exists():
             pytest.skip("Test VCF not found")
-        runner.invoke(app, ["add", str(TEST_VCF), collection_path])
+        runner.invoke(app, ["add", collection_path, str(TEST_VCF)])
 
         # Get the sample table name
         store = Collection(collection_path)
@@ -588,7 +588,7 @@ class TestCLIAddAndQuery:
         assert result.exit_code == 0
 
     def test_add_nonexistent_vcf(self, collection_path):
-        result = runner.invoke(app, ["add", "/nonexistent.vcf", collection_path])
+        result = runner.invoke(app, ["add", collection_path, "/nonexistent.vcf"])
         assert result.exit_code != 0
 
     def test_info_nonexistent_collection(self):
