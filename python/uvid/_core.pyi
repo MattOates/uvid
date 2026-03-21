@@ -1,6 +1,7 @@
 """Type stubs for the uvid._core native extension module."""
 
 import uuid
+from os import PathLike
 from typing import Optional
 
 NAMESPACE_UVID: uuid.UUID
@@ -9,6 +10,40 @@ NAMESPACE_UVID: uuid.UUID
 Computed as ``uuid5(NAMESPACE_OID, "UVID")``.
 Value: ``2696985c-755c-53de-b6b9-1745af20d0fd``
 """
+
+class AssemblyNotDetectedError(ValueError):
+    """Raised when assembly cannot be detected from the VCF header.
+
+    Subclass of ``ValueError`` so it can be caught as either
+    ``AssemblyNotDetectedError`` or ``ValueError``.
+    """
+
+    ...
+
+def vcf_passthrough(
+    input: str | PathLike[str],
+    output: str | PathLike[str] | None = None,
+    use_uuid: bool = False,
+    assembly: str | None = None,
+) -> int:
+    """Process a VCF file, replacing the ID column with UVID identifiers.
+
+    Args:
+        input: Path to input VCF file (.vcf or .vcf.gz).
+        output: Path to output file. ``None`` writes plain VCF to stdout.
+            If the path ends in ``.vcf.gz``, output is bgzf-compressed.
+        use_uuid: When ``True``, emit UUIDv5 representation instead of UVID hex.
+        assembly: Assembly override (e.g. ``"GRCh37"``, ``"GRCh38"``).
+            ``None`` to auto-detect from the VCF header.
+
+    Returns:
+        The number of data records processed.
+
+    Raises:
+        AssemblyNotDetectedError: If assembly cannot be detected and no override given.
+        OSError: On I/O errors.
+    """
+    ...
 
 class UVID:
     """A 128-bit Universal Variant ID encoding a human genomic variant."""

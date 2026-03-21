@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from uvid import NAMESPACE_UVID, UVID, Collection
+from uvid import (
+    NAMESPACE_UVID,
+    UVID,
+    AssemblyNotDetectedError,
+    Collection,
+    vcf_passthrough,
+)
 
 
 # ──────────────────────────────────────────────────────
@@ -598,3 +604,256 @@ class TestCLIAddAndQuery:
     def test_samples_nonexistent_collection(self):
         result = runner.invoke(app, ["samples", "/nonexistent.uvid"])
         assert result.exit_code != 0
+
+
+# ──────────────────────────────────────────────────────
+# VCF passthrough tests
+# ──────────────────────────────────────────────────────
+
+SAMPLE_VCF = Path(__file__).parent.parent.parent / "test_data" / "sample.vcf"
+
+# A minimal VCF with assembly in the header (for auto-detection tests)
+VCF_WITH_ASSEMBLY = """\
+##fileformat=VCFv4.3
+##reference=GRCh38
+##contig=<ID=chr1,length=248956422>
+#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO
+chr1\t100\t.\tA\tG\t30\tPASS\tDP=50
+chr1\t200\trs456\tC\tT\t45\tPASS\tDP=60
+"""
+
+
+class TestVcfPassthrough:
+    """Test the Rust-backed vcf_passthrough function."""
+
+    def test_basic_with_assembly_override(self, tmp_path):
+        """Passthrough with explicit assembly override on sample.vcf."""
+        out = tmp_path / "out.vcf"
+        count = vcf_passthrough(SAMPLE_VCF, out, assembly="GRCh38")
+        assert count == 5
+
+        lines = out.read_text().splitlines()
+        header_lines = [l for l in lines if l.startswith("#")]
+        data_lines = [l for l in lines if not l.startswith("#")]
+        assert len(data_lines) == 5
+
+        # First record: chr1 100 A>G — ID should be a UVID hex
+        fields = data_lines[0].split("\t")
+        assert fields[0] == "chr1"
+        assert fields[1] == "100"
+        assert len(fields[2]) == 35  # UVID hex format
+        assert fields[3] == "A"
+        assert fields[4] == "G"
+
+    def test_assembly_auto_detection(self, tmp_path):
+        """Assembly auto-detected from ##reference= header line."""
+        vcf_in = tmp_path / "input.vcf"
+        vcf_in.write_text(VCF_WITH_ASSEMBLY)
+        out = tmp_path / "out.vcf"
+
+        count = vcf_passthrough(vcf_in, out)  # no assembly override
+        assert count == 2
+
+        data_lines = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+        fields = data_lines[0].split("\t")
+        assert len(fields[2]) == 35  # UVID hex
+
+    def test_assembly_not_detected_error(self, tmp_path):
+        """Raises AssemblyNotDetectedError when header has no assembly and no override."""
+        out = tmp_path / "out.vcf"
+        with pytest.raises(AssemblyNotDetectedError):
+            vcf_passthrough(SAMPLE_VCF, out)
+
+    def test_assembly_not_detected_is_value_error(self, tmp_path):
+        """AssemblyNotDetectedError is a subclass of ValueError."""
+        out = tmp_path / "out.vcf"
+        with pytest.raises(ValueError):
+            vcf_passthrough(SAMPLE_VCF, out)
+
+    def test_uuid_mode(self, tmp_path):
+        """--uuid flag produces UUIDv5 format IDs."""
+        out = tmp_path / "out.vcf"
+        vcf_passthrough(SAMPLE_VCF, out, use_uuid=True, assembly="GRCh38")
+
+        data_lines = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+        fields = data_lines[0].split("\t")
+        # UUID format: 8-4-4-4-12 = 36 chars
+        assert len(fields[2]) == 36
+        assert fields[2].count("-") == 4
+
+    def test_multiallelic_id(self, tmp_path):
+        """Multi-allelic records get underscore-joined IDs."""
+        out = tmp_path / "out.vcf"
+        vcf_passthrough(SAMPLE_VCF, out, assembly="GRCh38")
+
+        data_lines = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+        # Record 4 (0-indexed 3) is chr2 1000 G A,C — multi-allelic
+        fields = data_lines[3].split("\t")
+        assert fields[0] == "chr2"
+        assert fields[1] == "1000"
+        assert "_" in fields[2]
+        parts = fields[2].split("_")
+        assert len(parts) == 2
+        assert all(len(p) == 35 for p in parts)
+
+    def test_dot_alt_keeps_dot_id(self, tmp_path):
+        """ALT='.' records keep ID as '.'."""
+        vcf_in = tmp_path / "dot_alt.vcf"
+        vcf_in.write_text(
+            "##fileformat=VCFv4.3\n"
+            "##reference=GRCh38\n"
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            "chr1\t100\t.\tA\tG\t30\tPASS\tDP=50\n"
+            "chr1\t200\t.\tC\t.\t10\tPASS\tDP=10\n"
+        )
+        out = tmp_path / "out.vcf"
+        vcf_passthrough(vcf_in, out)
+
+        data_lines = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+        # First record: chr1 100 A>G — should have a UVID
+        fields0 = data_lines[0].split("\t")
+        assert len(fields0[2]) == 35
+
+        # Second record: chr1 200 C . — ALT is ".", ID stays "."
+        fields1 = data_lines[1].split("\t")
+        assert fields1[4] == "."
+        assert fields1[2] == "."
+
+    def test_header_passthrough_unchanged(self, tmp_path):
+        """All header lines pass through byte-for-byte."""
+        out = tmp_path / "out.vcf"
+        vcf_passthrough(SAMPLE_VCF, out, assembly="GRCh38")
+
+        original_headers = [
+            l for l in SAMPLE_VCF.read_text().splitlines() if l.startswith("#")
+        ]
+        output_headers = [l for l in out.read_text().splitlines() if l.startswith("#")]
+        assert original_headers == output_headers
+
+    def test_preserves_all_columns(self, tmp_path):
+        """All columns except ID pass through unchanged."""
+        out = tmp_path / "out.vcf"
+        vcf_passthrough(SAMPLE_VCF, out, assembly="GRCh38")
+
+        original_data = [
+            l for l in SAMPLE_VCF.read_text().splitlines() if not l.startswith("#")
+        ]
+        output_data = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+
+        for orig, out_line in zip(original_data, output_data):
+            orig_fields = orig.split("\t")
+            out_fields = out_line.split("\t")
+            # Columns 0, 1, 3+ should be identical
+            assert orig_fields[0] == out_fields[0]  # CHROM
+            assert orig_fields[1] == out_fields[1]  # POS
+            assert orig_fields[3] == out_fields[3]  # REF
+            assert orig_fields[4] == out_fields[4]  # ALT
+            assert orig_fields[5] == out_fields[5]  # QUAL
+            assert orig_fields[6] == out_fields[6]  # FILTER
+            assert orig_fields[7] == out_fields[7]  # INFO
+            if len(orig_fields) > 8:
+                assert orig_fields[8] == out_fields[8]  # FORMAT
+                assert orig_fields[9] == out_fields[9]  # SAMPLE1
+
+    def test_deterministic(self, tmp_path):
+        """Two runs produce identical output."""
+        out1 = tmp_path / "out1.vcf"
+        out2 = tmp_path / "out2.vcf"
+        vcf_passthrough(SAMPLE_VCF, out1, assembly="GRCh38")
+        vcf_passthrough(SAMPLE_VCF, out2, assembly="GRCh38")
+        assert out1.read_text() == out2.read_text()
+
+    def test_bgzf_output(self, tmp_path):
+        """Output ending in .vcf.gz is bgzf-compressed."""
+        out = tmp_path / "out.vcf.gz"
+        count = vcf_passthrough(SAMPLE_VCF, out, assembly="GRCh38")
+        assert count == 5
+
+        # Check gzip magic bytes
+        data = out.read_bytes()
+        assert data[0:2] == b"\x1f\x8b"
+
+    def test_stdout_output(self, tmp_path, capsys):
+        """output=None writes to stdout."""
+        # This writes to actual stdout, which capsys won't capture for Rust.
+        # Instead, just verify it doesn't error.
+        count = vcf_passthrough(SAMPLE_VCF, None, assembly="GRCh38")
+        assert count == 5
+
+    def test_uvid_matches_direct_encode(self, tmp_path):
+        """UVIDs in passthrough output match UVID.encode() for the same variant."""
+        out = tmp_path / "out.vcf"
+        vcf_passthrough(SAMPLE_VCF, out, assembly="GRCh38")
+
+        data_lines = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+        # First record: chr1 100 A G
+        fields = data_lines[0].split("\t")
+        passthrough_uvid = fields[2]
+
+        direct_uvid = UVID.encode("chr1", 100, "A", "G", "GRCh38")
+        assert passthrough_uvid == direct_uvid.to_hex()
+
+    def test_uuid_matches_direct_encode(self, tmp_path):
+        """UUIDs in passthrough output match UVID.encode().uuid5() for the same variant."""
+        out = tmp_path / "out.vcf"
+        vcf_passthrough(SAMPLE_VCF, out, use_uuid=True, assembly="GRCh38")
+
+        data_lines = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+        fields = data_lines[0].split("\t")
+        passthrough_uuid = fields[2]
+
+        direct_uvid = UVID.encode("chr1", 100, "A", "G", "GRCh38")
+        assert passthrough_uuid == str(direct_uvid.uuid5())
+
+
+class TestCLIVcf:
+    """Test the 'uvid vcf' CLI command."""
+
+    def test_vcf_basic(self, tmp_path):
+        out = tmp_path / "out.vcf"
+        result = runner.invoke(app, ["vcf", str(SAMPLE_VCF), str(out), "-a", "GRCh38"])
+        assert result.exit_code == 0
+        assert "Processed 5 records" in result.output or "Processed 5 records" in (
+            result.stderr or ""
+        )
+
+        data_lines = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+        assert len(data_lines) == 5
+
+    def test_vcf_uuid_flag(self, tmp_path):
+        out = tmp_path / "out.vcf"
+        result = runner.invoke(
+            app, ["vcf", str(SAMPLE_VCF), str(out), "-a", "GRCh38", "--uuid"]
+        )
+        assert result.exit_code == 0
+
+        data_lines = [l for l in out.read_text().splitlines() if not l.startswith("#")]
+        fields = data_lines[0].split("\t")
+        assert len(fields[2]) == 36  # UUID format
+
+    def test_vcf_no_assembly_error(self, tmp_path):
+        """Without assembly flag on a VCF with no assembly info, should error."""
+        out = tmp_path / "out.vcf"
+        result = runner.invoke(app, ["vcf", str(SAMPLE_VCF), str(out)])
+        assert result.exit_code != 0
+
+    def test_vcf_auto_detect_assembly(self, tmp_path):
+        """VCF with ##reference=GRCh38 works without -a flag."""
+        vcf_in = tmp_path / "input.vcf"
+        vcf_in.write_text(VCF_WITH_ASSEMBLY)
+        out = tmp_path / "out.vcf"
+
+        result = runner.invoke(app, ["vcf", str(vcf_in), str(out)])
+        assert result.exit_code == 0
+
+    def test_vcf_nonexistent_input(self, tmp_path):
+        out = tmp_path / "out.vcf"
+        result = runner.invoke(app, ["vcf", "/nonexistent.vcf", str(out)])
+        assert result.exit_code != 0
+
+    def test_vcf_bgzf_output(self, tmp_path):
+        out = tmp_path / "out.vcf.gz"
+        result = runner.invoke(app, ["vcf", str(SAMPLE_VCF), str(out), "-a", "GRCh38"])
+        assert result.exit_code == 0
+        data = out.read_bytes()
+        assert data[0:2] == b"\x1f\x8b"

@@ -8,6 +8,7 @@ pub mod store;
 pub mod twobit;
 pub mod uvid128;
 pub mod vcf;
+pub mod vcf_passthrough;
 
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
@@ -15,6 +16,9 @@ use std::path::PathBuf;
 
 use assembly::{Assembly, ChrIndex};
 use uvid128::Uvid128;
+
+// Custom Python exception: subclass of ValueError
+pyo3::create_exception!(uvid._core, AssemblyNotDetectedError, PyValueError);
 
 /// Python-exposed UVID class.
 #[pyclass(name = "UVID", skip_from_py_object)]
@@ -242,11 +246,62 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUvid>()?;
     m.add_class::<PyCollection>()?;
 
+    // Custom exception
+    m.add(
+        "AssemblyNotDetectedError",
+        m.py().get_type::<AssemblyNotDetectedError>(),
+    )?;
+
     // Expose the UVID namespace UUID as a Python uuid.UUID constant
     let py = m.py();
     let uuid_mod = py.import("uuid")?;
     let ns = uuid_mod.call_method1("UUID", (uvid128::UVID_NAMESPACE.to_string(),))?;
     m.add("NAMESPACE_UVID", ns)?;
 
+    // Module-level function for VCF passthrough
+    m.add_function(wrap_pyfunction!(py_vcf_passthrough, m)?)?;
+
     Ok(())
+}
+
+/// Process a VCF file, replacing the ID column with UVID identifiers.
+///
+/// Args:
+///     input: Path to input VCF file (.vcf or .vcf.gz).
+///     output: Path to output file (None for stdout). If ends in .vcf.gz, bgzf-compressed.
+///     use_uuid: If True, emit UUIDv5 instead of UVID hex.
+///     assembly: Assembly override ("GRCh37", "GRCh38", etc.). None to auto-detect from header.
+///
+/// Returns:
+///     Number of data records processed.
+///
+/// Raises:
+///     AssemblyNotDetectedError: If assembly cannot be detected and no override given.
+///     OSError: On I/O errors.
+#[pyfunction]
+#[pyo3(name = "vcf_passthrough", signature = (input, output = None, use_uuid = false, assembly = None))]
+fn py_vcf_passthrough(
+    input: PathBuf,
+    output: Option<PathBuf>,
+    use_uuid: bool,
+    assembly: Option<&str>,
+) -> PyResult<u64> {
+    let asm_override = match assembly {
+        Some(s) => {
+            let asm: Assembly = s.parse().map_err(|e: String| PyValueError::new_err(e))?;
+            Some(asm)
+        }
+        None => None,
+    };
+
+    vcf_passthrough::vcf_passthrough(&input, output.as_deref(), use_uuid, asm_override).map_err(
+        |e| match e {
+            vcf_passthrough::VcfPassthroughError::AssemblyNotDetected => {
+                AssemblyNotDetectedError::new_err(e.to_string())
+            }
+            vcf_passthrough::VcfPassthroughError::Io(io_err) => {
+                PyIOError::new_err(format!("{}", io_err))
+            }
+        },
+    )
 }

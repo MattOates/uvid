@@ -1,11 +1,12 @@
 """UVID CLI - command-line interface for managing .uvid collections."""
 
+import sys
 from pathlib import Path
 from typing import List, Optional
 
 import typer
 
-from uvid import UVID, Collection
+from uvid import UVID, AssemblyNotDetectedError, Collection, vcf_passthrough
 
 app = typer.Typer(
     name="uvid",
@@ -37,6 +38,47 @@ def add(
         )
         store.add_vcf(str(vcf_path), assembly)
     typer.echo("Done.")
+
+
+@app.command()
+def vcf(
+    input: Path = typer.Argument(..., help="Input VCF file (.vcf or .vcf.gz)"),
+    output: Optional[Path] = typer.Argument(
+        None,
+        help="Output file; omit for stdout. Ends in .vcf.gz for bgzf compression.",
+    ),
+    uuid: bool = typer.Option(
+        False, "--uuid", help="Use UUIDv5 representation instead of UVID hex"
+    ),
+    assembly: Optional[str] = typer.Option(
+        None,
+        "--assembly",
+        "-a",
+        help="Override assembly (GRCh37, GRCh38). Auto-detected from header if omitted.",
+    ),
+):
+    """Process a VCF file, replacing the ID column with UVID identifiers."""
+    if not input.exists():
+        typer.echo(f"Error: VCF file not found: {input}", err=True)
+        raise typer.Exit(1)
+
+    try:
+        count = vcf_passthrough(
+            input,
+            output,
+            use_uuid=uuid,
+            assembly=assembly,
+        )
+    except AssemblyNotDetectedError:
+        typer.echo(
+            "Error: Could not detect genome assembly from VCF header.\n"
+            "Use --assembly/-a to specify GRCh37 or GRCh38.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    dest = str(output) if output else "stdout"
+    typer.echo(f"Processed {count} records → {dest}", err=True)
 
 
 @app.command()
