@@ -1,6 +1,14 @@
 """Type stubs for the uvid._core native extension module."""
 
+import uuid
 from typing import Optional
+
+NAMESPACE_UVID: uuid.UUID
+"""The UVID namespace UUID for UUIDv5 generation.
+
+Computed as ``uuid5(NAMESPACE_OID, "UVID")``.
+Value: ``2696985c-755c-53de-b6b9-1745af20d0fd``
+"""
 
 class UVID:
     """A 128-bit Universal Variant ID encoding a human genomic variant."""
@@ -73,6 +81,17 @@ class UVID:
 
         Raises:
             ValueError: If the chromosome is invalid.
+        """
+        ...
+
+    def uuid5(self) -> uuid.UUID:
+        """Convert this UVID to a deterministic UUIDv5.
+
+        Uses the UVID namespace (derived from OID namespace + "UVID")
+        and the raw 128-bit integer bytes as the name.
+
+        Returns:
+            A Python uuid.UUID with version=5.
         """
         ...
 

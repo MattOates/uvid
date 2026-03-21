@@ -102,6 +102,16 @@ impl PyUvid {
         Ok((PyUvid { inner: lower }, PyUvid { inner: upper }))
     }
 
+    /// Convert this UVID to a deterministic UUIDv5.
+    ///
+    /// Uses the UVID namespace (derived from the OID namespace + "UVID")
+    /// and the raw 128-bit integer bytes as the name.
+    fn uuid5<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let uuid = self.inner.to_uuid5();
+        let uuid_mod = py.import("uuid")?;
+        uuid_mod.call_method1("UUID", (uuid.to_string(),))
+    }
+
     fn __repr__(&self) -> String {
         format!("UVID({})", self.inner.to_hex_string())
     }
@@ -231,5 +241,12 @@ impl PyCollection {
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUvid>()?;
     m.add_class::<PyCollection>()?;
+
+    // Expose the UVID namespace UUID as a Python uuid.UUID constant
+    let py = m.py();
+    let uuid_mod = py.import("uuid")?;
+    let ns = uuid_mod.call_method1("UUID", (uvid128::UVID_NAMESPACE.to_string(),))?;
+    m.add("NAMESPACE_UVID", ns)?;
+
     Ok(())
 }

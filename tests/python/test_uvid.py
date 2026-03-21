@@ -2,11 +2,12 @@
 
 import os
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
 
-from uvid import UVID, Collection
+from uvid import NAMESPACE_UVID, UVID, Collection
 
 
 # ──────────────────────────────────────────────────────
@@ -293,6 +294,71 @@ class TestUVIDDeterminism:
         a = UVID.encode("chr1", 100, "A", "G")
         b = UVID.encode("chr1", 100, "A", "T")
         assert a != b
+
+
+class TestUVIDUuid5:
+    """Test UVID to UUIDv5 conversion."""
+
+    def test_uuid5_returns_uuid(self):
+        uvid = UVID.encode("chr1", 100, "A", "G")
+        result = uvid.uuid5()
+        assert isinstance(result, uuid.UUID)
+
+    def test_uuid5_version(self):
+        uvid = UVID.encode("chr1", 100, "A", "G")
+        result = uvid.uuid5()
+        assert result.version == 5
+
+    def test_uuid5_rfc4122_variant(self):
+        uvid = UVID.encode("chr1", 100, "A", "G")
+        result = uvid.uuid5()
+        # RFC 4122 variant has the top bits of clock_seq_hi_and_reserved == 0b10
+        assert result.variant == "specified in RFC 4122"
+
+    def test_uuid5_deterministic(self):
+        uvid = UVID.encode("chr1", 100, "A", "G")
+        a = uvid.uuid5()
+        b = uvid.uuid5()
+        assert a == b
+
+    def test_uuid5_different_variants(self):
+        a = UVID.encode("chr1", 100, "A", "G")
+        b = UVID.encode("chr1", 100, "A", "T")
+        assert a.uuid5() != b.uuid5()
+
+    def test_uuid5_matches_python_stdlib(self):
+        """UUIDv5 from Rust should match manual SHA-1 construction with same inputs."""
+        import hashlib
+
+        uvid = UVID.encode("chr1", 100, "A", "G")
+        rust_uuid = uvid.uuid5()
+        # Replicate UUIDv5 manually: SHA-1(namespace_bytes + name_bytes)
+        # Python's uuid.uuid5() encodes the name as UTF-8 which mangles
+        # raw bytes, so we compute it directly per RFC 4122 §4.3.
+        raw_bytes = uvid.as_int().to_bytes(16, byteorder="big")
+        h = hashlib.sha1(NAMESPACE_UVID.bytes + raw_bytes).digest()[:16]
+        b = bytearray(h)
+        b[6] = (b[6] & 0x0F) | 0x50  # version 5
+        b[8] = (b[8] & 0x3F) | 0x80  # RFC 4122 variant
+        python_uuid = uuid.UUID(bytes=bytes(b))
+        assert rust_uuid == python_uuid
+
+
+class TestNamespaceUVID:
+    """Test the NAMESPACE_UVID module constant."""
+
+    def test_is_uuid(self):
+        assert isinstance(NAMESPACE_UVID, uuid.UUID)
+
+    def test_value(self):
+        expected = uuid.uuid5(uuid.NAMESPACE_OID, "UVID")
+        assert NAMESPACE_UVID == expected
+
+    def test_version(self):
+        assert NAMESPACE_UVID.version == 5
+
+    def test_string_value(self):
+        assert str(NAMESPACE_UVID) == "2696985c-755c-53de-b6b9-1745af20d0fd"
 
 
 # ──────────────────────────────────────────────────────

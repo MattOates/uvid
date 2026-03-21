@@ -16,8 +16,20 @@
 /// Assembly is at the LSB so same-locus variants from different assemblies cluster together.
 use std::fmt;
 
+use uuid::Uuid;
+
 use crate::assembly::{Assembly, ChrIndex};
 use crate::twobit;
+
+/// The UVID namespace UUID for UUIDv5 generation.
+///
+/// Computed as `UUIDv5(NAMESPACE_OID, "UVID")` where NAMESPACE_OID is the
+/// ISO OID namespace from RFC 4122 (`6ba7b812-9dad-11d1-80b4-00c04fd430c8`).
+///
+/// Value: `2696985c-755c-53de-b6b9-1745af20d0fd`
+pub const UVID_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x26, 0x96, 0x98, 0x5c, 0x75, 0x5c, 0x53, 0xde, 0xb6, 0xb9, 0x17, 0x45, 0xaf, 0x20, 0xd0, 0xfd,
+]);
 
 // Bit field positions and masks
 const CHR_SHIFT: u32 = 123;
@@ -265,6 +277,14 @@ impl Uvid128 {
         let value = u128::from_str_radix(&clean, 16).ok()?;
         Some(Uvid128(value))
     }
+
+    /// Convert this UVID to a deterministic UUIDv5.
+    ///
+    /// Uses [`UVID_NAMESPACE`] as the namespace and the raw big-endian bytes
+    /// of the 128-bit integer as the name, per RFC 4122 §4.3.
+    pub fn to_uuid5(self) -> Uuid {
+        Uuid::new_v5(&UVID_NAMESPACE, &self.0.to_be_bytes())
+    }
 }
 
 impl fmt::Debug for Uvid128 {
@@ -481,5 +501,35 @@ mod tests {
         let a = Uvid128::encode(ChrIndex(0), 1, b"A", b"G", Assembly::GRCh38).unwrap();
         let b = Uvid128::encode(ChrIndex(0), 1, b"A", b"T", Assembly::GRCh38).unwrap();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_uuid5_deterministic() {
+        let uvid = Uvid128::encode(ChrIndex(0), 100, b"A", b"G", Assembly::GRCh38).unwrap();
+        let a = uvid.to_uuid5();
+        let b = uvid.to_uuid5();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_uuid5_different_variants() {
+        let a = Uvid128::encode(ChrIndex(0), 100, b"A", b"G", Assembly::GRCh38).unwrap();
+        let b = Uvid128::encode(ChrIndex(0), 100, b"A", b"T", Assembly::GRCh38).unwrap();
+        assert_ne!(a.to_uuid5(), b.to_uuid5());
+    }
+
+    #[test]
+    fn test_uuid5_version_and_variant() {
+        let uvid = Uvid128::encode(ChrIndex(2), 12345, b"GCTA", b"A", Assembly::GRCh38).unwrap();
+        let uuid = uvid.to_uuid5();
+        assert_eq!(uuid.get_version_num(), 5);
+        assert_eq!(uuid.get_variant(), uuid::Variant::RFC4122);
+    }
+
+    #[test]
+    fn test_uvid_namespace_matches_oid_derivation() {
+        // Verify our precomputed constant matches UUIDv5(OID, "UVID")
+        let expected = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"UVID");
+        assert_eq!(UVID_NAMESPACE, expected);
     }
 }
