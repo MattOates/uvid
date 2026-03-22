@@ -1,0 +1,46 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          pip install maturin typer
+          pip install "mkdocs-material>=9.7,<10" "mkdocstrings[python]>=0.27"
+
+      - name: Build extension (for stub resolution)
+        run: maturin develop --release
+
+      - name: Generate Rust API docs
+        run: |
+          cargo doc --no-deps
+          mkdir -p docs/_rust_api
+          cp -r target/doc/* docs/_rust_api/
+
+      - name: Build MkDocs (strict)
+        run: mkdocs build --strict
+
+      - name: Deploy to GitHub Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: mkdocs gh-deploy --force
