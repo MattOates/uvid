@@ -2,7 +2,6 @@
 
 import uuid
 from os import PathLike
-from typing import Optional
 
 NAMESPACE_UVID: uuid.UUID
 """The UVID namespace UUID for UUIDv5 generation.
@@ -55,7 +54,7 @@ class UVID:
         ref_seq: str,
         alt_seq: str,
         assembly: str = "GRCh38",
-    ) -> "UVID":
+    ) -> UVID:
         """Encode a variant as a UVID.
 
         Args:
@@ -78,7 +77,17 @@ class UVID:
 
         Returns:
             A dict with keys: chr (str), pos (int), ref (str), alt (str),
-            ref_len (int), alt_len (int), overflow (bool), assembly (str).
+            ref_len (int), alt_len (int), ref_is_exact (bool),
+            alt_is_exact (bool), ref_fingerprint (int | None),
+            alt_fingerprint (int | None), assembly (str).
+
+            When ``ref_is_exact`` or ``alt_is_exact`` is ``False``, the
+            corresponding sequence is returned as N-repeats (the actual
+            bases can be recovered from the reference genome).
+
+            ``ref_fingerprint`` and ``alt_fingerprint`` are 17-bit Rabin
+            fingerprints of the original sequence, present only for
+            length-mode alleles (``None`` for string-mode alleles).
 
         Raises:
             ValueError: If the UVID data is malformed.
@@ -90,7 +99,7 @@ class UVID:
         ...
 
     @staticmethod
-    def from_hex(hex_str: str) -> "UVID":
+    def from_hex(hex_str: str) -> UVID:
         """Create a UVID from a hex string (with or without dashes).
 
         Raises:
@@ -103,19 +112,30 @@ class UVID:
         ...
 
     @staticmethod
-    def from_int(value: int) -> "UVID":
+    def from_int(value: int) -> UVID:
         """Create a UVID from a raw 128-bit integer value."""
         ...
 
     @staticmethod
-    def range(chr: str, start_pos: int, end_pos: int) -> tuple["UVID", "UVID"]:
+    def range(
+        chr: str,
+        start_pos: int,
+        end_pos: int,
+        assembly: str = "GRCh38",
+    ) -> tuple[UVID, UVID]:
         """Compute UVID range bounds for a genomic region.
+
+        Args:
+            chr: Chromosome name.
+            start_pos: Start position (1-based, inclusive).
+            end_pos: End position (1-based, inclusive).
+            assembly: Genome assembly ("GRCh37", "GRCh38").
 
         Returns:
             A (lower, upper) tuple of UVIDs bounding the region.
 
         Raises:
-            ValueError: If the chromosome is invalid.
+            ValueError: If the chromosome or position is invalid.
         """
         ...
 
@@ -134,10 +154,10 @@ class UVID:
     def __str__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __ne__(self, other: object) -> bool: ...
-    def __lt__(self, other: "UVID") -> bool: ...
-    def __le__(self, other: "UVID") -> bool: ...
-    def __gt__(self, other: "UVID") -> bool: ...
-    def __ge__(self, other: "UVID") -> bool: ...
+    def __lt__(self, other: UVID) -> bool: ...
+    def __le__(self, other: UVID) -> bool: ...
+    def __gt__(self, other: UVID) -> bool: ...
+    def __ge__(self, other: UVID) -> bool: ...
     def __hash__(self) -> int: ...
 
 class Collection:
@@ -195,6 +215,7 @@ class Collection:
         chr: str,
         start_pos: int,
         end_pos: int,
+        assembly: str = "GRCh38",
     ) -> list[dict[str, object]]:
         """Search for variants in a genomic region.
 

@@ -13,10 +13,10 @@ from uvid._core import (
 )
 
 __all__ = [
-    "UVID",
-    "Collection",
     "NAMESPACE_UVID",
+    "UVID",
     "AssemblyNotDetectedError",
+    "Collection",
     "vcf_passthrough",
 ]
 __version__ = "0.1.0"

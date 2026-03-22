@@ -1,11 +1,12 @@
 """Tests for the UVID Python bindings and CLI."""
 
-import os
-import tempfile
+from __future__ import annotations
+
 import uuid
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from uvid import (
     NAMESPACE_UVID,
@@ -14,7 +15,7 @@ from uvid import (
     Collection,
     vcf_passthrough,
 )
-
+from uvid.cli import app
 
 # ──────────────────────────────────────────────────────
 # UVID class tests
@@ -78,9 +79,15 @@ class TestUVIDEncode:
         with pytest.raises(ValueError, match="Invalid chromosome"):
             UVID.encode("chr99", 100, "A", "G")
 
-    def test_encode_invalid_nucleotide(self):
-        with pytest.raises(ValueError):
-            UVID.encode("chr1", 100, "N", "G")
+    def test_encode_n_bases_use_length_mode(self):
+        """N-containing sequences no longer fail — they use length mode."""
+        uvid = UVID.encode("chr1", 100, "N", "G")
+        fields = uvid.decode()
+        assert fields["ref_is_exact"] is False
+        assert fields["alt_is_exact"] is True
+        # Length mode has fingerprint, string mode does not
+        assert fields["ref_fingerprint"] is not None
+        assert fields["alt_fingerprint"] is None
 
     def test_encode_position_zero(self):
         with pytest.raises(ValueError):
@@ -108,27 +115,54 @@ class TestUVIDDecode:
         assert fields["alt"] == "A"
         assert fields["ref_len"] == 4
         assert fields["alt_len"] == 1
-        assert fields["overflow"] is False
+        assert fields["ref_is_exact"] is True
+        assert fields["alt_is_exact"] is True
+        assert fields["ref_fingerprint"] is None
+        assert fields["alt_fingerprint"] is None
         assert fields["assembly"] == "GRCh38"
 
-    def test_decode_overflow(self):
-        """Sequences > 38 bases total trigger overflow mode."""
+    def test_decode_length_mode(self):
+        """Sequences > 20 bases use length mode (not exact)."""
+        uvid = UVID.encode("chr1", 1, "A" * 21, "C" * 21)
+        fields = uvid.decode()
+        assert fields["ref_is_exact"] is False
+        assert fields["alt_is_exact"] is False
+        assert fields["ref_len"] == 21
+        assert fields["alt_len"] == 21
+        # Length mode returns N-repeats as placeholder
+        assert fields["ref"] == "N" * 21
+        assert fields["alt"] == "N" * 21
+        # Length mode has fingerprints
+        assert fields["ref_fingerprint"] is not None
+        assert fields["alt_fingerprint"] is not None
+        assert isinstance(fields["ref_fingerprint"], int)
+        assert isinstance(fields["alt_fingerprint"], int)
+        # Fingerprints should be < 2^17 = 131072
+        assert 0 <= fields["ref_fingerprint"] < 131072
+        assert 0 <= fields["alt_fingerprint"] < 131072
+
+    def test_decode_max_string_mode(self):
+        """Exactly 20 bases per allele stays in string mode (exact)."""
         uvid = UVID.encode("chr1", 1, "A" * 20, "C" * 20)
         fields = uvid.decode()
-        assert fields["overflow"] is True
-        assert fields["ref_len"] == 20
-        assert fields["alt_len"] == 20
-        # In overflow mode, sequences are not stored
-        assert fields["ref"] == ""
-        assert fields["alt"] == ""
+        assert fields["ref_is_exact"] is True
+        assert fields["alt_is_exact"] is True
+        assert fields["ref_fingerprint"] is None
+        assert fields["alt_fingerprint"] is None
+        assert fields["ref"] == "A" * 20
+        assert fields["alt"] == "C" * 20
 
-    def test_decode_max_payload(self):
-        """Exactly 38 bases should NOT overflow."""
-        uvid = UVID.encode("chr1", 1, "A" * 19, "C" * 19)
-        fields = uvid.decode()
-        assert fields["overflow"] is False
-        assert fields["ref"] == "A" * 19
-        assert fields["alt"] == "C" * 19
+    def test_decode_fingerprint_discriminates_sequences(self):
+        """Same-length sequences at same locus should produce different fingerprints."""
+        uvid_a = UVID.encode("chr1", 1, "A", "A" * 21 + "C")  # 22 bases ending in C
+        uvid_b = UVID.encode("chr1", 1, "A", "A" * 21 + "G")  # 22 bases ending in G
+        fields_a = uvid_a.decode()
+        fields_b = uvid_b.decode()
+        assert fields_a["alt_len"] == fields_b["alt_len"] == 22
+        # Fingerprints should differ
+        assert fields_a["alt_fingerprint"] != fields_b["alt_fingerprint"]
+        # And therefore the UVIDs themselves should differ
+        assert uvid_a != uvid_b
 
 
 class TestUVIDHex:
@@ -199,11 +233,15 @@ class TestUVIDSorting:
         assert uvid1 < uvid2
 
     def test_assembly_clustering(self):
-        """Same-locus variants from different assemblies should be close."""
+        """Same-locus variants from different assemblies differ only in assembly bits."""
         uvid37 = UVID.encode("chr1", 100, "A", "G", "GRCh37")
         uvid38 = UVID.encode("chr1", 100, "A", "G", "GRCh38")
-        # Assembly is in LSB (2 bits), so they differ by at most 3
-        assert abs(uvid37.as_int() - uvid38.as_int()) <= 3
+        # chr1 has offset 0 in both assemblies, so linearized pos is the same.
+        # Assembly is at bits 95-94, so they differ by exactly 1 << 94.
+        assert uvid37 != uvid38
+        # GRCh37 = assembly code 0, GRCh38 = assembly code 1
+        # So GRCh37 UVID < GRCh38 UVID for same locus
+        assert uvid37 < uvid38
 
     def test_list_sort(self):
         """UVIDs should sort in genomic order."""
@@ -358,7 +396,7 @@ class TestNamespaceUVID:
 
     def test_value(self):
         expected = uuid.uuid5(uuid.NAMESPACE_OID, "UVID")
-        assert NAMESPACE_UVID == expected
+        assert expected == NAMESPACE_UVID
 
     def test_version(self):
         assert NAMESPACE_UVID.version == 5
@@ -379,7 +417,7 @@ class TestCollectionCreate:
 
     def test_create_new(self, tmp_path):
         path = tmp_path / "test.uvid"
-        store = Collection(str(path))
+        Collection(str(path))  # side effect: creates the file
         assert path.exists()
 
     def test_open_existing(self, tmp_path):
@@ -460,17 +498,15 @@ class TestCollectionSearch:
     def test_search_empty_region(self, loaded_collection):
         samples = loaded_collection.list_samples()
         sample_table = samples[0][0]
-        # Search in a region far from any variants
-        results = loaded_collection.search_region(
-            sample_table, "chrY", 999999000, 999999999
-        )
+        # Search in a region far from any variants in our small test VCF
+        results = loaded_collection.search_region(sample_table, "chrY", 1000000, 2000000)
         assert results == [] or isinstance(results, list)
 
     def test_search_result_fields(self, loaded_collection):
         samples = loaded_collection.list_samples()
         sample_table = samples[0][0]
-        # Wide search to find at least one result
-        results = loaded_collection.search_region(sample_table, "chr1", 1, 999999999)
+        # Wide search to find at least one result (within chr1 bounds)
+        results = loaded_collection.search_region(sample_table, "chr1", 1, 248956422)
         if results:
             r = results[0]
             assert "uvid" in r
@@ -494,9 +530,6 @@ class TestCollectionSearch:
 # CLI tests (using subprocess via typer testing)
 # ──────────────────────────────────────────────────────
 
-from typer.testing import CliRunner
-from uvid.cli import app
-
 runner = CliRunner()
 
 
@@ -510,9 +543,7 @@ class TestCLIEncode:
         assert "Integer:" in result.output
 
     def test_encode_with_assembly(self):
-        result = runner.invoke(
-            app, ["encode", "chr1", "100", "A", "G", "--assembly", "GRCh37"]
-        )
+        result = runner.invoke(app, ["encode", "chr1", "100", "A", "G", "--assembly", "GRCh37"])
         assert result.exit_code == 0
 
 
@@ -588,7 +619,7 @@ class TestCLIAddAndQuery:
                 "--start",
                 "1",
                 "--end",
-                "999999999",
+                "248956422",
             ],
         )
         assert result.exit_code == 0
@@ -633,7 +664,6 @@ class TestVcfPassthrough:
         assert count == 5
 
         lines = out.read_text().splitlines()
-        header_lines = [l for l in lines if l.startswith("#")]
         data_lines = [l for l in lines if not l.startswith("#")]
         assert len(data_lines) == 5
 
@@ -724,9 +754,7 @@ class TestVcfPassthrough:
         out = tmp_path / "out.vcf"
         vcf_passthrough(SAMPLE_VCF, out, assembly="GRCh38")
 
-        original_headers = [
-            l for l in SAMPLE_VCF.read_text().splitlines() if l.startswith("#")
-        ]
+        original_headers = [l for l in SAMPLE_VCF.read_text().splitlines() if l.startswith("#")]
         output_headers = [l for l in out.read_text().splitlines() if l.startswith("#")]
         assert original_headers == output_headers
 
@@ -735,12 +763,10 @@ class TestVcfPassthrough:
         out = tmp_path / "out.vcf"
         vcf_passthrough(SAMPLE_VCF, out, assembly="GRCh38")
 
-        original_data = [
-            l for l in SAMPLE_VCF.read_text().splitlines() if not l.startswith("#")
-        ]
+        original_data = [l for l in SAMPLE_VCF.read_text().splitlines() if not l.startswith("#")]
         output_data = [l for l in out.read_text().splitlines() if not l.startswith("#")]
 
-        for orig, out_line in zip(original_data, output_data):
+        for orig, out_line in zip(original_data, output_data, strict=False):
             orig_fields = orig.split("\t")
             out_fields = out_line.split("\t")
             # Columns 0, 1, 3+ should be identical
@@ -822,9 +848,7 @@ class TestCLIVcf:
 
     def test_vcf_uuid_flag(self, tmp_path):
         out = tmp_path / "out.vcf"
-        result = runner.invoke(
-            app, ["vcf", str(SAMPLE_VCF), str(out), "-a", "GRCh38", "--uuid"]
-        )
+        result = runner.invoke(app, ["vcf", str(SAMPLE_VCF), str(out), "-a", "GRCh38", "--uuid"])
         assert result.exit_code == 0
 
         data_lines = [l for l in out.read_text().splitlines() if not l.startswith("#")]
