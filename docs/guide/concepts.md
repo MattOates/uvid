@@ -75,6 +75,9 @@ The 17-bit fingerprint has 131,072 possible values. For two specific same-length
 
 Using the birthday-bound approximation, the probability that **any** pair collides among *n* distinct same-length alleles at a single locus is roughly **n^2 / (2 x 131,072)**.
 
+!!! note "131,072"
+    This is just the cardinality of distinct integers that fit in 17 bits 2^17
+
 In practice, the number of distinct same-length alleles at any single locus is very small:
 
 | Same-length alleles at one locus | Collision probability |
@@ -84,10 +87,10 @@ In practice, the number of distinct same-length alleles at any single locus is v
 | 10 | ~1 in 2,621 (0.038%) |
 | 50 | ~1 in 105 (0.95%) |
 
-At genome scale, what matters is whether any locus across an entire dataset produces a collision. The old design (length-only, no fingerprint) had **113 collisions** affecting 265 records across the 4.4 million variant ClinVar dataset. With the 17-bit Rabin fingerprint, the same dataset has **zero collisions** -- the fingerprint provides enough discrimination to separate every real-world case.
-
 !!! success "ClinVar validation"
-    4,397,869 ClinVar records processed. Old design: 113 UUID collisions. New design with 17-bit Rabin fingerprint: **zero collisions**.
+    4,397,869 ClinVar records processed with **zero collisions**.
+
+At genome scale, what matters is whether any locus across an entire dataset produces a collision. Without the fingerprint -- encoding only by length -- the ClinVar dataset (4.4 million variants) would contain **113 collisions** affecting 265 records, all from distinct long alleles at the same locus that happen to share the same length. The Rabin fingerprint separates every one of these cases, bringing collisions to **zero**. This works because the vast majority of variants are short (SNVs are 1 bp) and stored exactly in string mode, so the fingerprint only needs to discriminate among the small number of length-mode alleles that share a locus and length.
 
 ## UUIDv5
 

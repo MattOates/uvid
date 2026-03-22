@@ -12,7 +12,7 @@ Genomic variant databases typically assign arbitrary integer or string IDs to va
 - **Streaming-friendly** -- because the ID is known before database interaction, bulk inserts can go straight to upsert in a single transaction without select/update cycles. This dramatically improves throughput for whole-genome batch pipelines.
 - **Harmonizing** -- different textual descriptions of the same variant (VCF, HGVS) receive the same ID after normalisation against the reference, eliminating duplicate entries.
 - **Sortable** -- UVIDs sort in natural genomic order (chromosome, position, alleles) when compared as unsigned 128-bit integers, so range scans are trivial.
-- **Compact** -- 16 bytes per variant. Alleles up to 20 bases are stored exactly; longer alleles keep a 17-bit Rabin fingerprint that eliminated all collisions across 4.4 million ClinVar records.
+- **Compact** -- 16 bytes per variant. Alleles up to 20 bases are stored exactly; longer alleles keep a 17-bit Rabin fingerprint for collision resistance (zero collisions across 4.4 million ClinVar records).
 - **Shard-friendly** -- the ID is known before any database interaction, so it can drive partitioning and sharding strategies in distributed variant stores.
 - **UUIDv5 compatible** -- every UVID converts to a deterministic UUIDv5 for interoperability with systems that expect standard UUIDs.
 

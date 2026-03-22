@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn test_very_long_sequences_encodable() {
-        // Previously these would return None — now they always succeed
+        // Very long sequences always succeed via length mode
         let ref_seq = vec![b'A'; 10000];
         let alt_seq = vec![b'T'; 5000];
 
@@ -521,14 +521,14 @@ mod tests {
 
     #[test]
     fn test_n_bases_no_longer_fail() {
-        // Previously this returned None — now always succeeds via length mode
+        // N bases are handled via length mode
         let uvid = Uvid128::encode(ChrIndex(0), 1, b"N", b"G", Assembly::GRCh38);
         assert!(uvid.is_some());
     }
 
     #[test]
     fn test_long_allele_no_longer_fails() {
-        // Previously alleles > 63 bases returned None — now always succeeds
+        // Alleles of any length succeed via length mode
         let long_seq = vec![b'A'; 10000];
         let uvid = Uvid128::encode(ChrIndex(0), 1, &long_seq, b"G", Assembly::GRCh38);
         assert!(uvid.is_some());

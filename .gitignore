@@ -16,3 +16,4 @@ venv
 *.uvid
 *.uvid.gz
 site/
+docs/_rust_api/

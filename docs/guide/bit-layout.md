@@ -106,13 +106,13 @@ packet-beta
 
 With the mode bit at position 45 and a 6-bit length field, the length would overlap with the first DNA base position. The 5-bit length (max 31, but capped at 20 bases since 40 bits / 2 bits per base = 20) avoids this overlap.
 
-### Why 28-bit length?
+### Why 28-bit length (not more)?
 
-The longest human chromosome (chr1) is 248,956,422 bp, which requires 28 bits to represent. The previous design used 45 bits for length (max ~35 trillion), which was unnecessarily large. Capping at 28 bits frees 17 bits for the Rabin fingerprint.
+The longest human chromosome (chr1) is 248,956,422 bp, which requires 28 bits to represent. A naive approach might dedicate all 45 remaining bits (after the mode bit) to length, but that would cap out at ~35 trillion -- far beyond any biological sequence and a waste of bits. Capping at 28 bits is sufficient for any human allele and frees 17 bits for a Rabin fingerprint that dramatically improves collision resistance.
 
 ### Why 17-bit Rabin fingerprint?
 
-A 17-bit fingerprint divides collision probability by 131,072 compared to length-only encoding. The polynomial x^17 + x^3 + 1 is irreducible over GF(2), ensuring good distribution. In practice, this eliminated all 113 collisions found in the ClinVar dataset (4.4M records).
+Without a fingerprint, two length-mode alleles at the same locus with the same sequence length would be indistinguishable -- a length-only encoding produces collisions wherever this occurs. A 17-bit fingerprint provides 131,072 distinct values, reducing the per-pair collision probability to ~7.6 x 10^-6. The polynomial x^17 + x^3 + 1 is irreducible over GF(2), ensuring good distribution. Across 4.4 million ClinVar records, a length-only encoding would produce 113 collisions; with the fingerprint there are zero.
 
 ### Why symmetric 46/46?
 
