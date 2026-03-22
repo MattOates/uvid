@@ -28,16 +28,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v5
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: |
-          pip install maturin pytest typer
+        run: uv sync --frozen --extra dev
       - name: Build and install
-        run: maturin develop --release
+        run: uv run maturin develop --release
       - name: Run Python tests
-        run: python -m pytest tests/python -v
+        run: uv run python -m pytest tests/python -v
 
   lint:
     name: Lint

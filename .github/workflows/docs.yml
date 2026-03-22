@@ -20,17 +20,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: astral-sh/setup-uv@v5
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install Python dependencies
-        run: |
-          pip install maturin typer
-          pip install "mkdocs-material>=9.7,<10" "mkdocstrings[python]>=0.27"
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras
 
       - name: Build extension (for stub resolution)
-        run: maturin develop --release
+        run: uv run maturin develop --release
 
       - name: Generate Rust API docs
         run: |
@@ -39,8 +39,8 @@ jobs:
           cp -r target/doc/* docs/_rust_api/
 
       - name: Build MkDocs (strict)
-        run: mkdocs build --strict
+        run: uv run mkdocs build --strict
 
       - name: Deploy to GitHub Pages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: mkdocs gh-deploy --force
+        run: uv run mkdocs gh-deploy --force

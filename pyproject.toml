@@ -41,6 +41,7 @@ uvid = "uvid.cli:app"
 
 [project.optional-dependencies]
 dev = [
+    "maturin",
     "pytest",
     "ruff",
     "mypy",
