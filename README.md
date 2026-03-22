@@ -9,12 +9,11 @@ Genomic variant databases typically assign arbitrary integer or string IDs to va
 ### Benefits
 
 - **Deterministic** -- the same variant always produces the same 128-bit ID, anywhere, without coordinating with a central authority.
+- **Compact variant representation** -- 16 bytes per variant. Alleles up to 20 bases are stored exactly; longer alleles keep length and a 17-bit Rabin fingerprint for collision resistance (zero collisions across 4.4 million ClinVar records). A UVID representing 20bp or less on REF and ALT sequence, can fully recover the actual variant data. For REF and ALT strings longer than this we can encode and search/validate a given string set produced the ID or was part of the ID. This allows UVID to be "search by sequence" as well as location. But only exact sequence for anything over 20bp.
 - **Streaming-friendly** -- because the ID is known before database interaction, bulk inserts can go straight to upsert in a single transaction without select/update cycles. This dramatically improves throughput for whole-genome batch pipelines.
-- **Harmonizing** -- different textual descriptions of the same variant (VCF, HGVS) receive the same ID after normalisation against the reference, eliminating duplicate entries.
 - **Sortable** -- UVIDs sort in natural genomic order (chromosome, position, alleles) when compared as unsigned 128-bit integers, so range scans are trivial.
-- **Compact** -- 16 bytes per variant. Alleles up to 20 bases are stored exactly; longer alleles keep a 17-bit Rabin fingerprint for collision resistance (zero collisions across 4.4 million ClinVar records).
 - **Shard-friendly** -- the ID is known before any database interaction, so it can drive partitioning and sharding strategies in distributed variant stores.
-- **UUIDv5 compatible** -- every UVID converts to a deterministic UUIDv5 for interoperability with systems that expect standard UUIDs.
+- **UUIDv5 compatible** -- every UVID converts to a deterministic UUIDv5 for interoperability with systems that expect standard UUIDs. This also provides some level of pseudonymisation of the variant information via SHA1 hashing. So if you want the reverse of UVIDs properties for keeping variant information in the ID itself then this gives you all the universal properties without revealing variant info.
 
 ### Limitations
 
