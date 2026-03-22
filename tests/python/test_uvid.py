@@ -600,12 +600,14 @@ class TestCLIAddAndQuery:
             pytest.skip("Test VCF not found")
         runner.invoke(app, ["add", collection_path, str(TEST_VCF)])
 
-        # Get the sample table name
+        # Get the sample table name, then close the collection before the CLI
+        # reopens it (Windows DuckDB holds an exclusive file lock).
         store = Collection(collection_path)
         samples = store.list_samples()
         if not samples:
             pytest.skip("No samples in test VCF")
         sample_table = samples[0][0]
+        del store
 
         result = runner.invoke(
             app,
