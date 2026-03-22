@@ -12,6 +12,9 @@ use serde_json::Value;
 use crate::uvid128::Uvid128;
 use crate::vcf::ParsedVcf;
 
+/// A row from the `_meta` table for sample entries: (table_name, source_file, sample_name).
+type SampleInfo = (String, String, String);
+
 /// A handle to a .uvid collection file (DuckDB database).
 pub struct UvidStore {
     conn: Connection,
@@ -234,9 +237,7 @@ impl UvidStore {
     }
 
     /// List all sample table names in the collection.
-    pub fn list_samples(
-        &self,
-    ) -> Result<Vec<(String, String, String)>, Box<dyn std::error::Error>> {
+    pub fn list_samples(&self) -> Result<Vec<SampleInfo>, Box<dyn std::error::Error>> {
         let mut stmt = self.conn.prepare(
             "SELECT table_name, source_file, sample_name FROM _meta WHERE table_type = 'sample' ORDER BY table_name"
         )?;
@@ -281,8 +282,10 @@ impl UvidStore {
         chr: crate::assembly::ChrIndex,
         start_pos: u32,
         end_pos: u32,
+        assembly: crate::assembly::Assembly,
     ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
-        let (lower, upper) = Uvid128::range(chr, start_pos, end_pos);
+        let (lower, upper) = Uvid128::range(chr, start_pos, end_pos, assembly)
+            .ok_or("Invalid chromosome or position for range query")?;
 
         let lower_u128 = lower.as_u128();
         let upper_u128 = upper.as_u128();

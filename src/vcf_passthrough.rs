@@ -109,7 +109,7 @@ fn match_assembly_pattern(s: &str) -> Option<Assembly> {
 ///
 /// - `input`            — path to the input VCF (.vcf or .vcf.gz)
 /// - `output`           — output path; `None` → write plain VCF to stdout.
-///                         If the path ends in `.vcf.gz`, output is bgzf-compressed.
+///   If the path ends in `.vcf.gz`, output is bgzf-compressed.
 /// - `use_uuid`         — when true, emit UUIDv5 representation instead of UVID hex
 /// - `assembly_override`— when `Some`, skip header detection and use this assembly
 ///
@@ -318,9 +318,7 @@ fn passthrough_from_reader<R: BufRead>(
     // For bgzf output, we need to call finish() on the underlying bgzf writer
     // to write the EOF block.
     if let OutputWriter::Bgzf(buf_writer) = writer {
-        let bgzf_writer = buf_writer
-            .into_inner()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let bgzf_writer = buf_writer.into_inner().map_err(io::Error::other)?;
         bgzf_writer.finish()?;
     }
 
@@ -370,10 +368,7 @@ fn compute_id(
                 }
             }
             None => {
-                eprintln!(
-                    "Warning: failed to encode UVID for {}:{} {}>{}",
-                    chr, pos, ref_seq, alt_trimmed
-                );
+                // Only happens for invalid chr/pos (not for long sequences)
                 ids.push(".".to_string());
             }
         }

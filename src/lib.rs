@@ -62,7 +62,10 @@ impl PyUvid {
         dict.set_item("alt", String::from_utf8_lossy(&variant.alt_seq).to_string())?;
         dict.set_item("ref_len", variant.ref_len)?;
         dict.set_item("alt_len", variant.alt_len)?;
-        dict.set_item("overflow", variant.overflow)?;
+        dict.set_item("ref_is_exact", variant.ref_is_exact)?;
+        dict.set_item("alt_is_exact", variant.alt_is_exact)?;
+        dict.set_item("ref_fingerprint", variant.ref_fingerprint.map(|f| f as u64))?;
+        dict.set_item("alt_fingerprint", variant.alt_fingerprint.map(|f| f as u64))?;
         dict.set_item("assembly", variant.assembly.to_string())?;
         Ok(dict)
     }
@@ -97,11 +100,23 @@ impl PyUvid {
     ///
     /// Returns (lower, upper) as a tuple of UVID.
     #[staticmethod]
-    fn range(chr: &str, start_pos: u32, end_pos: u32) -> PyResult<(PyUvid, PyUvid)> {
+    #[pyo3(signature = (chr, start_pos, end_pos, assembly = "GRCh38"))]
+    fn range(
+        chr: &str,
+        start_pos: u32,
+        end_pos: u32,
+        assembly: &str,
+    ) -> PyResult<(PyUvid, PyUvid)> {
         let chr_idx = ChrIndex::from_name(chr)
             .ok_or_else(|| PyValueError::new_err(format!("Invalid chromosome: {}", chr)))?;
 
-        let (lower, upper) = Uvid128::range(chr_idx, start_pos, end_pos);
+        let asm: Assembly = assembly
+            .parse()
+            .map_err(|e: String| PyValueError::new_err(e))?;
+
+        let (lower, upper) = Uvid128::range(chr_idx, start_pos, end_pos, asm).ok_or_else(|| {
+            PyValueError::new_err("Failed to compute range: invalid chromosome or position")
+        })?;
 
         Ok((PyUvid { inner: lower }, PyUvid { inner: upper }))
     }
@@ -205,7 +220,7 @@ impl PyCollection {
     }
 
     /// Search for variants in a genomic region.
-    #[pyo3(signature = (table_name, chr, start_pos, end_pos))]
+    #[pyo3(signature = (table_name, chr, start_pos, end_pos, assembly = "GRCh38"))]
     fn search_region<'py>(
         &self,
         py: Python<'py>,
@@ -213,13 +228,18 @@ impl PyCollection {
         chr: &str,
         start_pos: u32,
         end_pos: u32,
+        assembly: &str,
     ) -> PyResult<Bound<'py, pyo3::types::PyList>> {
         let chr_idx = ChrIndex::from_name(chr)
             .ok_or_else(|| PyValueError::new_err(format!("Invalid chromosome: {}", chr)))?;
 
+        let asm: Assembly = assembly
+            .parse()
+            .map_err(|e: String| PyValueError::new_err(e))?;
+
         let results = self
             .inner
-            .search_region(table_name, chr_idx, start_pos, end_pos)
+            .search_region(table_name, chr_idx, start_pos, end_pos, asm)
             .map_err(|e| PyIOError::new_err(format!("Search failed: {}", e)))?;
 
         let list = pyo3::types::PyList::empty(py);
