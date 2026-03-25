@@ -3,9 +3,10 @@
 //! Provides 128-bit compact identifiers for human genetic variation,
 //! backed by DuckDB storage and noodles-vcf parsing.
 
+pub mod allele_pack;
 pub mod assembly;
+pub mod normalize;
 pub mod store;
-pub mod twobit;
 pub mod uvid128;
 pub mod vcf;
 pub mod vcf_passthrough;
