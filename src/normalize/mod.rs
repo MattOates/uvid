@@ -28,6 +28,8 @@ pub mod data;
 pub mod error;
 pub mod reference;
 #[cfg(test)]
+mod tests_gatk;
+#[cfg(test)]
 mod tests_vt;
 pub mod types;
 
