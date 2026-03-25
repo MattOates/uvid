@@ -1,6 +1,6 @@
 [package]
 name = "uvid"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Matt E. Oates <mattoates+support@gmail.com>"]
 description = "Universal Variant ID - compact 128-bit identifiers for human genetic variation"
