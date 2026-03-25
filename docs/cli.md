@@ -2,6 +2,37 @@
 
 The `uvid` command-line tool provides access to all core functionality.
 
+## setup
+
+Download reference genome files for variant normalization.
+
+```bash
+uvid setup [--assembly/-a ASSEMBLY]
+```
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--assembly`, `-a` | both | Assembly to download (`GRCh37`, `GRCh38`). Can be repeated. Omit to download both |
+
+Downloads `.2bit` reference genomes from UCSC into the UVID data directory. The data directory is platform-specific (see [Normalization setup](guide/normalization.md#data-directory)) and can be overridden with the `UVID_DATA_DIR` environment variable.
+
+If a file already exists in the data directory, it is skipped.
+
+**Examples:**
+
+```bash
+# Download both GRCh37 and GRCh38
+uvid setup
+
+# Download only GRCh38
+uvid setup -a GRCh38
+
+# Download to a custom location
+UVID_DATA_DIR=/data/references uvid setup -a GRCh38
+```
+
 ## encode
 
 Encode a variant as a UVID.
@@ -74,7 +105,7 @@ Assembly:   GRCh38
 Process a VCF file, replacing the ID column with UVID identifiers.
 
 ```bash
-uvid vcf INPUT [OUTPUT] [--uuid] [--assembly/-a ASSEMBLY]
+uvid vcf INPUT [OUTPUT] [--uuid] [--normalize/-n] [--assembly/-a ASSEMBLY]
 ```
 
 **Arguments:**
@@ -89,13 +120,21 @@ uvid vcf INPUT [OUTPUT] [--uuid] [--assembly/-a ASSEMBLY]
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--uuid` | `false` | Use UUIDv5 representation instead of UVID hex |
+| `--normalize`, `-n` | `false` | Normalize variants (left-alignment + trimming) before encoding. Requires a reference genome file; see [Normalization](guide/normalization.md#setup) |
 | `--assembly`, `-a` | auto-detect | Override assembly (`GRCh37`, `GRCh38`) |
+
+If `--normalize` is set and the reference genome is missing, `uvid vcf` will
+offer to download it interactively when running in a terminal. In non-interactive
+contexts (pipes, scripts), it exits with instructions to run `uvid setup`.
 
 **Examples:**
 
 ```bash
 # Basic passthrough
 uvid vcf input.vcf output.vcf -a GRCh38
+
+# With normalization
+uvid vcf input.vcf output.vcf --normalize -a GRCh38
 
 # UUIDv5 format
 uvid vcf input.vcf output.vcf --uuid -a GRCh38

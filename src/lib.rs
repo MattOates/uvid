@@ -3,9 +3,10 @@
 //! Provides 128-bit compact identifiers for human genetic variation,
 //! backed by DuckDB storage and noodles-vcf parsing.
 
+pub mod allele_pack;
 pub mod assembly;
+pub mod normalize;
 pub mod store;
-pub mod twobit;
 pub mod uvid128;
 pub mod vcf;
 pub mod vcf_passthrough;
@@ -17,8 +18,9 @@ use std::path::PathBuf;
 use assembly::{Assembly, ChrIndex};
 use uvid128::Uvid128;
 
-// Custom Python exception: subclass of ValueError
+// Custom Python exceptions
 pyo3::create_exception!(uvid._core, AssemblyNotDetectedError, PyValueError);
+pyo3::create_exception!(uvid._core, ReferenceNotFoundError, PyValueError);
 
 /// Python-exposed UVID class.
 #[pyclass(name = "UVID", skip_from_py_object)]
@@ -191,7 +193,7 @@ impl PyCollection {
             .parse()
             .map_err(|e: String| PyValueError::new_err(e))?;
 
-        let parsed = crate::vcf::parse_vcf(&path, asm)
+        let parsed = crate::vcf::parse_vcf(&path, asm, false)
             .map_err(|e| PyIOError::new_err(format!("Failed to parse VCF: {}", e)))?;
 
         let prefix = store::UvidStore::table_prefix(&path);
@@ -266,10 +268,14 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUvid>()?;
     m.add_class::<PyCollection>()?;
 
-    // Custom exception
+    // Custom exceptions
     m.add(
         "AssemblyNotDetectedError",
         m.py().get_type::<AssemblyNotDetectedError>(),
+    )?;
+    m.add(
+        "ReferenceNotFoundError",
+        m.py().get_type::<ReferenceNotFoundError>(),
     )?;
 
     // Expose the UVID namespace UUID as a Python uuid.UUID constant
@@ -278,8 +284,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let ns = uuid_mod.call_method1("UUID", (uvid128::UVID_NAMESPACE.to_string(),))?;
     m.add("NAMESPACE_UVID", ns)?;
 
-    // Module-level function for VCF passthrough
+    // Module-level functions
     m.add_function(wrap_pyfunction!(py_vcf_passthrough, m)?)?;
+    m.add_function(wrap_pyfunction!(py_data_dir, m)?)?;
 
     Ok(())
 }
@@ -291,6 +298,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 ///     output: Path to output file (None for stdout). If ends in .vcf.gz, bgzf-compressed.
 ///     use_uuid: If True, emit UUIDv5 instead of UVID hex.
 ///     assembly: Assembly override ("GRCh37", "GRCh38", etc.). None to auto-detect from header.
+///     normalize: If True, normalise variants
+///         (Tan et al. 2015, https://doi.org/10.1093/bioinformatics/btv112) before encoding.
+///         Requires a reference genome file in the data directory.
 ///
 /// Returns:
 ///     Number of data records processed.
@@ -298,13 +308,15 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// Raises:
 ///     AssemblyNotDetectedError: If assembly cannot be detected and no override given.
 ///     OSError: On I/O errors.
+///     ValueError: On normalization errors (e.g. reference genome not found).
 #[pyfunction]
-#[pyo3(name = "vcf_passthrough", signature = (input, output = None, use_uuid = false, assembly = None))]
+#[pyo3(name = "vcf_passthrough", signature = (input, output = None, use_uuid = false, assembly = None, normalize = false))]
 fn py_vcf_passthrough(
     input: PathBuf,
     output: Option<PathBuf>,
     use_uuid: bool,
     assembly: Option<&str>,
+    normalize: bool,
 ) -> PyResult<u64> {
     let asm_override = match assembly {
         Some(s) => {
@@ -314,14 +326,41 @@ fn py_vcf_passthrough(
         None => None,
     };
 
-    vcf_passthrough::vcf_passthrough(&input, output.as_deref(), use_uuid, asm_override).map_err(
-        |e| match e {
+    vcf_passthrough::vcf_passthrough(&input, output.as_deref(), use_uuid, asm_override, normalize)
+        .map_err(|e| match e {
             vcf_passthrough::VcfPassthroughError::AssemblyNotDetected => {
                 AssemblyNotDetectedError::new_err(e.to_string())
             }
             vcf_passthrough::VcfPassthroughError::Io(io_err) => {
                 PyIOError::new_err(format!("{}", io_err))
             }
-        },
-    )
+            vcf_passthrough::VcfPassthroughError::Normalize(ref norm_err) => {
+                // Raise a specific ReferenceNotFoundError when the reference
+                // genome file is missing, so the CLI can offer to download it.
+                if let normalize::NormalizeError::Reference(normalize::ReferenceError::NotFound {
+                    ..
+                }) = norm_err
+                {
+                    ReferenceNotFoundError::new_err(format!("{}", norm_err))
+                } else {
+                    PyValueError::new_err(format!("Normalization error: {}", norm_err))
+                }
+            }
+        })
+}
+
+/// Return the platform-specific data directory for UVID reference files.
+///
+/// Resolution order:
+///     1. ``UVID_DATA_DIR`` environment variable
+///     2. Platform default (Linux: ``~/.local/share/uvid``, macOS:
+///        ``~/Library/Application Support/uvid``, Windows: ``AppData\Roaming\uvid``)
+///
+/// Returns:
+///     The data directory path as a string, or ``None`` if no platform
+///     data directory can be determined and ``UVID_DATA_DIR`` is not set.
+#[pyfunction]
+#[pyo3(name = "data_dir")]
+fn py_data_dir() -> Option<String> {
+    normalize::data_dir().map(|p| p.to_string_lossy().into_owned())
 }

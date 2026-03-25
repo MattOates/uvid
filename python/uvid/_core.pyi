@@ -19,13 +19,52 @@ class AssemblyNotDetectedError(ValueError):
 
     ...
 
+class ReferenceNotFoundError(ValueError):
+    """Raised when a reference genome file is not found in the data directory.
+
+    Subclass of ``ValueError`` so it can be caught as either
+    ``ReferenceNotFoundError`` or ``ValueError``.
+
+    To install reference genomes, run ``uvid setup`` or set
+    ``UVID_DATA_DIR`` to a directory containing the reference files.
+    """
+
+    ...
+
+def data_dir() -> str | None:
+    """Return the platform-specific data directory for UVID reference files.
+
+    Resolution order:
+
+    1. ``UVID_DATA_DIR`` environment variable
+    2. Platform default:
+
+       - Linux: ``~/.local/share/uvid/``
+       - macOS: ``~/Library/Application Support/uvid/``
+       - Windows: ``C:\\Users\\<user>\\AppData\\Roaming\\uvid\\``
+
+    Returns:
+        The data directory path, or ``None`` if no platform data
+        directory can be determined and ``UVID_DATA_DIR`` is not set.
+    """
+    ...
+
 def vcf_passthrough(
     input: str | PathLike[str],
     output: str | PathLike[str] | None = None,
     use_uuid: bool = False,
     assembly: str | None = None,
+    normalize: bool = False,
 ) -> int:
     """Process a VCF file, replacing the ID column with UVID identifiers.
+
+    When ``normalize`` is ``True``, variants are normalised using the
+    `Tan et al. 2015 <https://doi.org/10.1093/bioinformatics/btv112>`_
+    algorithm (left-alignment + parsimonious trimming)
+    before UVID encoding, and the output POS/REF/ALT columns reflect
+    the normalised representation.  A reference genome file for the
+    resolved assembly must be present in the data directory
+    (``UVID_DATA_DIR`` or the platform default).
 
     Args:
         input: Path to input VCF file (.vcf or .vcf.gz).
@@ -34,6 +73,8 @@ def vcf_passthrough(
         use_uuid: When ``True``, emit UUIDv5 representation instead of UVID hex.
         assembly: Assembly override (e.g. ``"GRCh37"``, ``"GRCh38"``).
             ``None`` to auto-detect from the VCF header.
+        normalize: When ``True``, normalise variants before encoding.
+            Requires a reference genome file in the data directory.
 
     Returns:
         The number of data records processed.
@@ -41,6 +82,7 @@ def vcf_passthrough(
     Raises:
         AssemblyNotDetectedError: If assembly cannot be detected and no override given.
         OSError: On I/O errors.
+        ValueError: On normalisation errors (e.g. reference genome not found).
     """
     ...
 

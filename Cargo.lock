@@ -1172,6 +1172,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b166658496ccbe810eab4daccadb878bad396bf3bde159cc1dbc877eb1132e4b"
 dependencies = [
  "noodles-bgzf",
+ "noodles-core",
+ "noodles-fasta",
  "noodles-vcf",
 ]
 
@@ -1204,6 +1206,18 @@ dependencies = [
  "bit-vec",
  "bstr",
  "indexmap",
+ "noodles-bgzf",
+ "noodles-core",
+]
+
+[[package]]
+name = "noodles-fasta"
+version = "0.60.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5c8ccd951d43ba0a1c4dcc1f86fdc2ee86c1742de2988956bcdf1bc58905769"
+dependencies = [
+ "bstr",
+ "memchr",
  "noodles-bgzf",
  "noodles-core",
 ]
@@ -1982,6 +1996,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sysdirs"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7578b3743c69fccacb467648b3755cbee8fcef4cc9a4c8d75b0211cc082e1d20"
+
+[[package]]
 name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2196,6 +2216,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "twobit"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccd5793b6a7a2c3cace1e9826ec03449a632b228c5e2d1e63a2d77ab663d9006"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2263,7 +2289,9 @@ dependencies = [
  "pyo3",
  "serde",
  "serde_json",
+ "sysdirs",
  "tempfile",
+ "twobit",
  "uuid",
 ]
 

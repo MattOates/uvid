@@ -9,6 +9,8 @@ from uvid._core import (
     UVID,
     AssemblyNotDetectedError,
     Collection,
+    ReferenceNotFoundError,
+    data_dir,
     vcf_passthrough,
 )
 
@@ -17,6 +19,8 @@ __all__ = [
     "UVID",
     "AssemblyNotDetectedError",
     "Collection",
+    "ReferenceNotFoundError",
+    "data_dir",
     "vcf_passthrough",
 ]
 __version__ = "0.1.0"

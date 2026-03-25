@@ -26,8 +26,8 @@ use std::fmt;
 
 use uuid::Uuid;
 
+use crate::allele_pack;
 use crate::assembly::{self, Assembly, ChrIndex};
-use crate::twobit;
 
 /// The UVID namespace UUID for UUIDv5 generation.
 ///
@@ -105,16 +105,16 @@ impl Uvid128 {
         let linear = assembly::chr_pos_to_linear(chr, pos, assembly)?;
 
         // Encode each allele independently (always succeeds)
-        let ref_allele = twobit::encode_allele(ref_seq);
-        let alt_allele = twobit::encode_allele(alt_seq);
+        let ref_allele = allele_pack::encode_allele(ref_seq);
+        let alt_allele = allele_pack::encode_allele(alt_seq);
 
         // Extract mode bits (bit 45 of each 46-bit allele value)
-        let ref_mode = (ref_allele >> twobit::MODE_BIT_POS) & 1;
-        let alt_mode = (alt_allele >> twobit::MODE_BIT_POS) & 1;
+        let ref_mode = (ref_allele >> allele_pack::MODE_BIT_POS) & 1;
+        let alt_mode = (alt_allele >> allele_pack::MODE_BIT_POS) & 1;
 
         // Extract payloads (bits 44-0 of each 46-bit allele value)
-        let ref_payload = ref_allele & twobit::PAYLOAD_MASK;
-        let alt_payload = alt_allele & twobit::PAYLOAD_MASK;
+        let ref_payload = ref_allele & allele_pack::PAYLOAD_MASK;
+        let alt_payload = alt_allele & allele_pack::PAYLOAD_MASK;
 
         let mut value: u128 = 0;
 
@@ -159,33 +159,33 @@ impl Uvid128 {
         // Reconstruct the 46-bit allele values (mode bit + payload)
         let ref_mode = ((value >> REF_MODE_SHIFT) & REF_MODE_MASK) as u64;
         let ref_payload = ((value >> REF_PAYLOAD_SHIFT) & REF_PAYLOAD_MASK) as u64;
-        let ref_allele = (ref_mode << twobit::MODE_BIT_POS) | ref_payload;
+        let ref_allele = (ref_mode << allele_pack::MODE_BIT_POS) | ref_payload;
 
         let alt_mode = ((value >> ALT_MODE_SHIFT) & ALT_MODE_MASK) as u64;
         let alt_payload = (value & ALT_PAYLOAD_MASK) as u64;
-        let alt_allele = (alt_mode << twobit::MODE_BIT_POS) | alt_payload;
+        let alt_allele = (alt_mode << allele_pack::MODE_BIT_POS) | alt_payload;
 
         // Decode each allele
-        let ref_decoded = twobit::decode_allele(ref_allele);
-        let alt_decoded = twobit::decode_allele(alt_allele);
+        let ref_decoded = allele_pack::decode_allele(ref_allele);
+        let alt_decoded = allele_pack::decode_allele(alt_allele);
 
         let (ref_seq, ref_len, ref_is_exact, ref_fingerprint) = match ref_decoded {
-            twobit::AlleleDecoded::Sequence(seq) => {
+            allele_pack::AlleleDecoded::Sequence(seq) => {
                 let len = seq.len();
                 (seq, len, true, None)
             }
-            twobit::AlleleDecoded::Length { len, fingerprint } => {
+            allele_pack::AlleleDecoded::Length { len, fingerprint } => {
                 // Return N-repeats for length-mode alleles
                 (vec![b'N'; len], len, false, Some(fingerprint))
             }
         };
 
         let (alt_seq, alt_len, alt_is_exact, alt_fingerprint) = match alt_decoded {
-            twobit::AlleleDecoded::Sequence(seq) => {
+            allele_pack::AlleleDecoded::Sequence(seq) => {
                 let len = seq.len();
                 (seq, len, true, None)
             }
-            twobit::AlleleDecoded::Length { len, fingerprint } => {
+            allele_pack::AlleleDecoded::Length { len, fingerprint } => {
                 (vec![b'N'; len], len, false, Some(fingerprint))
             }
         };

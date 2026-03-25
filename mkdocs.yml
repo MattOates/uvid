@@ -85,6 +85,7 @@ nav:
       - Key Concepts: guide/concepts.md
       - Bit Layout: guide/bit-layout.md
       - VCF Passthrough: guide/vcf-passthrough.md
+      - Normalization: guide/normalization.md
   - Reference:
       - reference/index.md
       - Python API: reference/python-api.md
