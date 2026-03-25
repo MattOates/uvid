@@ -6,17 +6,23 @@ The VCF passthrough feature replaces the ID column in a VCF file with UVID ident
 
 1. Reads the input VCF (plain text or `.vcf.gz` with bgzf compression)
 2. Detects the genome assembly from the VCF header (or uses the provided override)
-3. For each data record, encodes the variant (CHROM, POS, REF, ALT) as a UVID
-4. Replaces the ID column with the UVID hex string (or UUIDv5 if requested)
-5. Writes the modified record to the output
+3. Optionally [normalizes](normalization.md) each variant (left-alignment + trimming)
+4. For each data record, encodes the variant (CHROM, POS, REF, ALT) as a UVID
+5. Replaces the ID column with the UVID hex string (or UUIDv5 if requested)
+6. Writes the modified record to the output
 
 Header lines are passed through unchanged. Multi-allelic records generate a UVID from the first ALT allele.
+
+When normalization is enabled, the output POS, REF, and ALT columns are also updated to their normalized values.
 
 ## CLI Usage
 
 ```bash
 # Basic passthrough
 uvid vcf input.vcf output.vcf -a GRCh38
+
+# With normalization
+uvid vcf input.vcf output.vcf --normalize -a GRCh38
 
 # UUIDv5 format
 uvid vcf input.vcf output.vcf -a GRCh38 --uuid
@@ -40,6 +46,9 @@ from uvid import vcf_passthrough
 # Basic usage
 count = vcf_passthrough("input.vcf", "output.vcf", assembly="GRCh38")
 print(f"Processed {count} records")
+
+# With normalization
+count = vcf_passthrough("input.vcf", "output.vcf", normalize=True, assembly="GRCh38")
 
 # UUIDv5 output
 count = vcf_passthrough("input.vcf", "output.vcf", use_uuid=True, assembly="GRCh38")

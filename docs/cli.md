@@ -74,7 +74,7 @@ Assembly:   GRCh38
 Process a VCF file, replacing the ID column with UVID identifiers.
 
 ```bash
-uvid vcf INPUT [OUTPUT] [--uuid] [--assembly/-a ASSEMBLY]
+uvid vcf INPUT [OUTPUT] [--uuid] [--normalize/-n] [--assembly/-a ASSEMBLY]
 ```
 
 **Arguments:**
@@ -89,6 +89,7 @@ uvid vcf INPUT [OUTPUT] [--uuid] [--assembly/-a ASSEMBLY]
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--uuid` | `false` | Use UUIDv5 representation instead of UVID hex |
+| `--normalize`, `-n` | `false` | Normalize variants (left-alignment + trimming) before encoding. Requires a reference genome file; see [Normalization](guide/normalization.md#setup) |
 | `--assembly`, `-a` | auto-detect | Override assembly (`GRCh37`, `GRCh38`) |
 
 **Examples:**
@@ -96,6 +97,9 @@ uvid vcf INPUT [OUTPUT] [--uuid] [--assembly/-a ASSEMBLY]
 ```bash
 # Basic passthrough
 uvid vcf input.vcf output.vcf -a GRCh38
+
+# With normalization
+uvid vcf input.vcf output.vcf --normalize -a GRCh38
 
 # UUIDv5 format
 uvid vcf input.vcf output.vcf --uuid -a GRCh38
