@@ -45,6 +45,21 @@ Multi-allelic records are normalized per-allele (each ALT allele is normalized i
 
 Normalization requires a reference genome file to fetch upstream bases during left-alignment. UVID auto-discovers reference files from a data directory -- no path parameters need to be passed.
 
+### Quick start
+
+The easiest way to install reference genomes is with `uvid setup`:
+
+```bash
+# Download both GRCh37 and GRCh38 (~800 MB each)
+uvid setup
+
+# Download only GRCh38
+uvid setup -a GRCh38
+```
+
+If you run `uvid vcf --normalize` without a reference genome and your terminal
+is interactive, UVID will offer to download it for you automatically.
+
 ### Reference files
 
 Place one of these files in your UVID data directory:
@@ -59,6 +74,9 @@ Place one of these files in your UVID data directory:
 The `.2bit` format is recommended: it is smaller and faster to load.
 
 !!! tip "Downloading reference genomes"
+    The recommended way to install reference genomes is `uvid setup`, which
+    downloads files to the correct location automatically.  For manual
+    installation:
     ```bash
     # GRCh38 2bit from UCSC
     curl -O https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.2bit

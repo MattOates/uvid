@@ -18,8 +18,9 @@ use std::path::PathBuf;
 use assembly::{Assembly, ChrIndex};
 use uvid128::Uvid128;
 
-// Custom Python exception: subclass of ValueError
+// Custom Python exceptions
 pyo3::create_exception!(uvid._core, AssemblyNotDetectedError, PyValueError);
+pyo3::create_exception!(uvid._core, ReferenceNotFoundError, PyValueError);
 
 /// Python-exposed UVID class.
 #[pyclass(name = "UVID", skip_from_py_object)]
@@ -267,10 +268,14 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUvid>()?;
     m.add_class::<PyCollection>()?;
 
-    // Custom exception
+    // Custom exceptions
     m.add(
         "AssemblyNotDetectedError",
         m.py().get_type::<AssemblyNotDetectedError>(),
+    )?;
+    m.add(
+        "ReferenceNotFoundError",
+        m.py().get_type::<ReferenceNotFoundError>(),
     )?;
 
     // Expose the UVID namespace UUID as a Python uuid.UUID constant
@@ -279,8 +284,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let ns = uuid_mod.call_method1("UUID", (uvid128::UVID_NAMESPACE.to_string(),))?;
     m.add("NAMESPACE_UVID", ns)?;
 
-    // Module-level function for VCF passthrough
+    // Module-level functions
     m.add_function(wrap_pyfunction!(py_vcf_passthrough, m)?)?;
+    m.add_function(wrap_pyfunction!(py_data_dir, m)?)?;
 
     Ok(())
 }
@@ -328,8 +334,33 @@ fn py_vcf_passthrough(
             vcf_passthrough::VcfPassthroughError::Io(io_err) => {
                 PyIOError::new_err(format!("{}", io_err))
             }
-            vcf_passthrough::VcfPassthroughError::Normalize(norm_err) => {
-                PyValueError::new_err(format!("Normalization error: {}", norm_err))
+            vcf_passthrough::VcfPassthroughError::Normalize(ref norm_err) => {
+                // Raise a specific ReferenceNotFoundError when the reference
+                // genome file is missing, so the CLI can offer to download it.
+                if let normalize::NormalizeError::Reference(normalize::ReferenceError::NotFound {
+                    ..
+                }) = norm_err
+                {
+                    ReferenceNotFoundError::new_err(format!("{}", norm_err))
+                } else {
+                    PyValueError::new_err(format!("Normalization error: {}", norm_err))
+                }
             }
         })
+}
+
+/// Return the platform-specific data directory for UVID reference files.
+///
+/// Resolution order:
+///     1. ``UVID_DATA_DIR`` environment variable
+///     2. Platform default (Linux: ``~/.local/share/uvid``, macOS:
+///        ``~/Library/Application Support/uvid``, Windows: ``AppData\Roaming\uvid``)
+///
+/// Returns:
+///     The data directory path as a string, or ``None`` if no platform
+///     data directory can be determined and ``UVID_DATA_DIR`` is not set.
+#[pyfunction]
+#[pyo3(name = "data_dir")]
+fn py_data_dir() -> Option<String> {
+    normalize::data_dir().map(|p| p.to_string_lossy().into_owned())
 }

@@ -4,13 +4,71 @@ from pathlib import Path
 
 import typer
 
-from uvid import UVID, AssemblyNotDetectedError, Collection, vcf_passthrough
+from uvid import (
+    UVID,
+    AssemblyNotDetectedError,
+    Collection,
+    ReferenceNotFoundError,
+    data_dir,
+    vcf_passthrough,
+)
 
 app = typer.Typer(
     name="uvid",
     help="Universal Variant ID - compact identifiers for human genetic variation.",
     no_args_is_help=True,
 )
+
+
+@app.command()
+def setup(
+    assembly: list[str] | None = typer.Option(
+        None,
+        "--assembly",
+        "-a",
+        help="Assembly to download (GRCh37, GRCh38). Omit for both.",
+    ),
+) -> None:
+    """Download reference genome files for variant normalization.
+
+    Downloads .2bit reference genomes from UCSC into the UVID data
+    directory.  Override the data directory with the UVID_DATA_DIR
+    environment variable.
+    """
+    from uvid.download import ASSEMBLIES, REFERENCE_URLS, download_reference, ensure_data_dir
+
+    target = data_dir()
+    if target is None:
+        typer.echo(
+            "Error: Could not determine a data directory.\nSet UVID_DATA_DIR to a writable path.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    target_path = Path(target)
+    assemblies = list(assembly) if assembly else ASSEMBLIES
+
+    for name in assemblies:
+        if name not in REFERENCE_URLS:
+            typer.echo(
+                f"Error: Unknown assembly '{name}'. Choose from: {', '.join(ASSEMBLIES)}", err=True
+            )
+            raise typer.Exit(1)
+
+    typer.echo(f"Data directory: {target_path}", err=True)
+    ensure_data_dir(target_path)
+
+    for name in assemblies:
+        _, filename = REFERENCE_URLS[name]
+        dest = target_path / filename
+        if dest.exists():
+            typer.echo(f"{filename} already exists, skipping.", err=True)
+            continue
+        typer.echo(f"Downloading {filename} (~800 MB)...", err=True)
+        download_reference(name, target_path)
+        typer.echo(f"Saved {dest}", err=True)
+
+    typer.echo("Setup complete.", err=True)
 
 
 @app.command()
@@ -34,6 +92,98 @@ def add(
     typer.echo("Done.")
 
 
+def _handle_reference_not_found(
+    exc: ReferenceNotFoundError,
+    input: Path,
+    output: Path | None,
+    uuid: bool,
+    assembly: str | None,
+    normalize: bool,
+) -> int | None:
+    """Handle a missing reference genome during ``vcf`` processing.
+
+    If stdin is a TTY, offer to download the reference interactively
+    and retry.  Otherwise, print instructions and return ``None``.
+    """
+    import sys
+
+    from uvid.download import ASSEMBLIES, REFERENCE_URLS, download_reference, ensure_data_dir
+
+    # Try to extract the assembly name from the error message.
+    msg = str(exc)
+    detected_assembly: str | None = None
+    for name in ASSEMBLIES:
+        if name in msg:
+            detected_assembly = name
+            break
+
+    target = data_dir()
+    if target is None:
+        typer.echo(
+            f"Error: {msg}\n\n"
+            "Could not determine a data directory.\n"
+            "Set UVID_DATA_DIR to a writable path and run:\n"
+            "  uvid setup",
+            err=True,
+        )
+        return None
+
+    target_path = Path(target)
+
+    if not sys.stdin.isatty():
+        typer.echo(
+            f"Error: {msg}\n\n"
+            "To install the reference genome, run:\n"
+            "  uvid setup\n\n"
+            f"Data directory: {target_path}\n"
+            "Override with UVID_DATA_DIR environment variable.",
+            err=True,
+        )
+        return None
+
+    # Interactive prompt.
+    assembly_label = detected_assembly or "the required assembly"
+    typer.echo(
+        f"Reference genome for {assembly_label} not found. Download now? (~800 MB) [Y/n] ",
+        err=True,
+        nl=False,
+    )
+    answer = sys.stdin.readline().strip().lower()
+    if answer and answer not in ("y", "yes"):
+        typer.echo(
+            "\nTo install later, run:\n"
+            "  uvid setup\n\n"
+            f"Data directory: {target_path}\n"
+            "Override with UVID_DATA_DIR environment variable.",
+            err=True,
+        )
+        return None
+
+    if detected_assembly is None or detected_assembly not in REFERENCE_URLS:
+        typer.echo(
+            f"Error: Could not determine which assembly to download from: {msg}\n"
+            "Run uvid setup --assembly <ASSEMBLY> manually.",
+            err=True,
+        )
+        return None
+
+    # Download and retry.
+    ensure_data_dir(target_path)
+    download_reference(detected_assembly, target_path)
+
+    try:
+        return vcf_passthrough(
+            input,
+            output,
+            use_uuid=uuid,
+            assembly=assembly,
+            normalize=normalize,
+        )
+    except ReferenceNotFoundError:
+        typer.echo("Error: Reference genome still not found after download.", err=True)
+        return None
+
+
 @app.command()
 def vcf(
     input: Path = typer.Argument(..., help="Input VCF file (.vcf or .vcf.gz)"),
@@ -54,8 +204,11 @@ def vcf(
         False,
         "--normalize",
         "-n",
-        help="Normalise variants (Tan et al. 2015, https://doi.org/10.1093/bioinformatics/btv112) before encoding. "
-        "Requires a reference genome in the data directory.",
+        help=(
+            "Normalise variants "
+            "(Tan et al. 2015, https://doi.org/10.1093/bioinformatics/btv112) "
+            "before encoding. Requires a reference genome in the data directory."
+        ),
     ),
 ) -> None:
     """Process a VCF file, replacing the ID column with UVID identifiers.
@@ -84,6 +237,11 @@ def vcf(
             err=True,
         )
         raise typer.Exit(1) from None
+    except ReferenceNotFoundError as exc:
+        result = _handle_reference_not_found(exc, input, output, uuid, assembly, normalize)
+        if result is None:
+            raise typer.Exit(1) from None
+        count = result
 
     dest = str(output) if output else "stdout"
     typer.echo(f"Processed {count} records → {dest}", err=True)

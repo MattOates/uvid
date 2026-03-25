@@ -19,6 +19,36 @@ class AssemblyNotDetectedError(ValueError):
 
     ...
 
+class ReferenceNotFoundError(ValueError):
+    """Raised when a reference genome file is not found in the data directory.
+
+    Subclass of ``ValueError`` so it can be caught as either
+    ``ReferenceNotFoundError`` or ``ValueError``.
+
+    To install reference genomes, run ``uvid setup`` or set
+    ``UVID_DATA_DIR`` to a directory containing the reference files.
+    """
+
+    ...
+
+def data_dir() -> str | None:
+    """Return the platform-specific data directory for UVID reference files.
+
+    Resolution order:
+
+    1. ``UVID_DATA_DIR`` environment variable
+    2. Platform default:
+
+       - Linux: ``~/.local/share/uvid/``
+       - macOS: ``~/Library/Application Support/uvid/``
+       - Windows: ``C:\\Users\\<user>\\AppData\\Roaming\\uvid\\``
+
+    Returns:
+        The data directory path, or ``None`` if no platform data
+        directory can be determined and ``UVID_DATA_DIR`` is not set.
+    """
+    ...
+
 def vcf_passthrough(
     input: str | PathLike[str],
     output: str | PathLike[str] | None = None,
