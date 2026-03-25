@@ -27,6 +27,8 @@ pub mod algorithm;
 pub mod data;
 pub mod error;
 pub mod reference;
+#[cfg(test)]
+mod tests_vt;
 pub mod types;
 
 // Re-export the most commonly used items at module level.
