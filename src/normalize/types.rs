@@ -7,7 +7,9 @@
 /// The result of normalizing a variant.
 ///
 /// Contains the (possibly modified) chromosome, position, and allele
-/// sequences after applying the Tan et al. 2015 normalization algorithm.
+/// sequences after applying the
+/// [Tan et al. 2015](https://doi.org/10.1093/bioinformatics/btv112)
+/// normalization algorithm.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedVariant {
     /// Chromosome/contig name (unchanged from input).

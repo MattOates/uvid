@@ -1,4 +1,5 @@
-//! VCF variant normalization (Tan et al. 2015).
+//! VCF variant normalization
+//! ([Tan et al. 2015](https://doi.org/10.1093/bioinformatics/btv112)).
 //!
 //! This module implements left-alignment and parsimonious trimming of
 //! VCF variant alleles so that differently-described variants that are

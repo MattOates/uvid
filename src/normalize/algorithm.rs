@@ -1,4 +1,5 @@
-//! Variant normalization algorithm (Tan et al. 2015).
+//! Variant normalization algorithm
+//! ([Tan et al. 2015](https://doi.org/10.1093/bioinformatics/btv112)).
 //!
 //! Implements the "unified representation" normalization:
 //! 1. **Right-trim**: strip matching trailing bases from REF and ALT
@@ -44,7 +45,8 @@ fn is_symbolic_or_special(allele: &[u8]) -> bool {
     false
 }
 
-/// Normalize a single variant using the Tan et al. 2015 algorithm.
+/// Normalize a single variant using the
+/// [Tan et al. 2015](https://doi.org/10.1093/bioinformatics/btv112) algorithm.
 ///
 /// # Arguments
 ///

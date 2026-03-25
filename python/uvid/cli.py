@@ -54,7 +54,7 @@ def vcf(
         False,
         "--normalize",
         "-n",
-        help="Normalise variants (Tan et al. 2015) before encoding. "
+        help="Normalise variants (Tan et al. 2015, https://doi.org/10.1093/bioinformatics/btv112) before encoding. "
         "Requires a reference genome in the data directory.",
     ),
 ) -> None:

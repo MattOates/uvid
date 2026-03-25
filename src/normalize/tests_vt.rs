@@ -13,6 +13,7 @@
 //!
 //! Source: vt normalize test suite (MIT license, github.com/atks/vt)
 //! Reference: Adrian Tan et al., Bioinformatics 31(13):2202-2204, 2015
+//! https://doi.org/10.1093/bioinformatics/btv112
 
 #[cfg(test)]
 mod tests {

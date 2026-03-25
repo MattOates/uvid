@@ -3,7 +3,8 @@
 /// modified VCF to stdout or a file.
 ///
 /// When a reference genome is provided, variants are normalised using the
-/// Tan et al. 2015 algorithm before UVID encoding, and the output VCF's
+/// [Tan et al. 2015](https://doi.org/10.1093/bioinformatics/btv112)
+/// algorithm before UVID encoding, and the output VCF's
 /// POS, REF, and ALT columns reflect the normalised representation.
 ///
 /// Uses line-based processing for maximum throughput — only the ID column
@@ -127,7 +128,8 @@ fn match_assembly_pattern(s: &str) -> Option<Assembly> {
 ///   If the path ends in `.vcf.gz`, output is bgzf-compressed.
 /// - `use_uuid`         — when true, emit UUIDv5 representation instead of UVID hex
 /// - `assembly_override`— when `Some`, skip header detection and use this assembly
-/// - `normalize`        — when true, normalise variants using Tan et al. 2015
+/// - `normalize`        — when true, normalise variants using
+///   [Tan et al. 2015](https://doi.org/10.1093/bioinformatics/btv112)
 ///   before encoding.  The reference genome is auto-discovered from the data
 ///   directory using the resolved assembly name.  The output POS/REF/ALT
 ///   columns are updated to reflect the normalised representation.

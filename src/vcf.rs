@@ -52,7 +52,8 @@ pub struct ParsedVcf {
 /// Parse a VCF file (plain or bgzf-compressed) and decompose multi-allelic sites.
 ///
 /// When `normalize` is true, each variant is normalised using the
-/// Tan et al. 2015 algorithm before UVID encoding. The reference genome
+/// [Tan et al. 2015](https://doi.org/10.1093/bioinformatics/btv112)
+/// algorithm before UVID encoding. The reference genome
 /// is auto-discovered from the data directory using the assembly name.
 pub fn parse_vcf(
     path: &Path,

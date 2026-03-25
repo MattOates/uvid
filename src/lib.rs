@@ -292,7 +292,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 ///     output: Path to output file (None for stdout). If ends in .vcf.gz, bgzf-compressed.
 ///     use_uuid: If True, emit UUIDv5 instead of UVID hex.
 ///     assembly: Assembly override ("GRCh37", "GRCh38", etc.). None to auto-detect from header.
-///     normalize: If True, normalise variants (Tan et al. 2015) before encoding.
+///     normalize: If True, normalise variants
+///         (Tan et al. 2015, https://doi.org/10.1093/bioinformatics/btv112) before encoding.
 ///         Requires a reference genome file in the data directory.
 ///
 /// Returns:

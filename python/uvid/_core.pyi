@@ -29,7 +29,8 @@ def vcf_passthrough(
     """Process a VCF file, replacing the ID column with UVID identifiers.
 
     When ``normalize`` is ``True``, variants are normalised using the
-    Tan et al. 2015 algorithm (left-alignment + parsimonious trimming)
+    `Tan et al. 2015 <https://doi.org/10.1093/bioinformatics/btv112>`_
+    algorithm (left-alignment + parsimonious trimming)
     before UVID encoding, and the output POS/REF/ALT columns reflect
     the normalised representation.  A reference genome file for the
     resolved assembly must be present in the data directory
