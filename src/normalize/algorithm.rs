@@ -187,7 +187,7 @@ fn normalize_one_pass(
 // Unit tests — derived from bcftools norm test suite (MIT license)
 // ===========================================================================
 //
-// Source: github.com/samtools/bcftools, test/norm.{vcf,out,fa}
+// Source: https://github.com/samtools/bcftools, test/norm.{vcf,out,fa}
 // License: MIT
 //
 // Each test case records its origin for attribution.

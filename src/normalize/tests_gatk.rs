@@ -13,8 +13,9 @@
 //! - `GRCh38.fa` + `GRCh38.fa.fai`
 //!
 //! Source: GATK LeftAlignAndTrimVariants test suite
-//!   (Apache License 2.0, github.com/broadinstitute/gatk)
+//!   (Apache License 2.0, https://github.com/broadinstitute/gatk)
 //! Reference: Broad Institute, Genome Analysis Toolkit (GATK)
+//!   https://gatk.broadinstitute.org/
 
 #[cfg(test)]
 mod tests {
@@ -44,7 +45,7 @@ mod tests {
     /// normalizes each allele independently.  Both alleles in those
     /// records are already in normalized form, so expected == input.
     ///
-    /// Source: GATK (Apache License 2.0, github.com/broadinstitute/gatk)
+    /// Source: GATK (Apache License 2.0, https://github.com/broadinstitute/gatk)
     ///
     /// Format: (chrom, in_pos, in_ref, in_alt, exp_pos, exp_ref, exp_alt, description)
     #[rustfmt::skip]

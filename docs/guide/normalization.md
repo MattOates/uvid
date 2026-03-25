@@ -173,8 +173,8 @@ The normalization implementation is validated against test suites from three ind
 
 | Source | Cases | Assembly | Description |
 |--------|-------|----------|-------------|
-| bcftools | 28 | Synthetic | SNVs, indels, complex, symbolic, boundary cases |
-| vt | 194 | GRCh37 | Indels on chr20 from [Tan et al.](https://doi.org/10.1093/bioinformatics/btv112) original implementation |
-| GATK | 19 | GRCh38 | LeftAlignAndTrimVariants: insertions, deletions, repeats |
+| [bcftools](https://github.com/samtools/bcftools) | 28 | Synthetic | SNVs, indels, complex, symbolic, boundary cases |
+| [vt](https://github.com/atks/vt) | 194 | GRCh37 | Indels on chr20 from [Tan et al.](https://doi.org/10.1093/bioinformatics/btv112) original implementation |
+| [GATK](https://github.com/broadinstitute/gatk) | 19 | GRCh38 | LeftAlignAndTrimVariants: insertions, deletions, repeats |
 
-The bcftools tests run against a small inline reference and are included in every test run. The vt and GATK tests require real reference genome files and are automatically skipped when those files are not available.
+The [bcftools](https://github.com/samtools/bcftools) tests run against a small inline reference and are included in every test run. The [vt](https://github.com/atks/vt) and [GATK](https://github.com/broadinstitute/gatk) tests require real reference genome files and are automatically skipped when those files are not available.

@@ -11,7 +11,7 @@
 //! - `GRCh37.2bit`  (preferred, ~800 MB)
 //! - `GRCh37.fa` + `GRCh37.fa.fai`
 //!
-//! Source: vt normalize test suite (MIT license, github.com/atks/vt)
+//! Source: vt normalize test suite (MIT license, https://github.com/atks/vt)
 //! Reference: Adrian Tan et al., Bioinformatics 31(13):2202-2204, 2015
 //! https://doi.org/10.1093/bioinformatics/btv112
 
@@ -39,7 +39,7 @@ mod tests {
     /// All 194 test cases from vt normalize test/normalize/01_IN.vcf
     /// and test/normalize/01_OUT.vcf.
     ///
-    /// Source: vt (MIT license, github.com/atks/vt)
+    /// Source: vt (MIT license, https://github.com/atks/vt)
     /// All variants are on chromosome "20" (b37 naming).
     const VT_TEST_CASES: &[(u32, &str, &str, u32, &str, &str)] = &[
         // (in_pos, in_ref, in_alt, exp_pos, exp_ref, exp_alt)
