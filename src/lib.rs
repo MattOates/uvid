@@ -192,7 +192,7 @@ impl PyCollection {
             .parse()
             .map_err(|e: String| PyValueError::new_err(e))?;
 
-        let parsed = crate::vcf::parse_vcf(&path, asm)
+        let parsed = crate::vcf::parse_vcf(&path, asm, false)
             .map_err(|e| PyIOError::new_err(format!("Failed to parse VCF: {}", e)))?;
 
         let prefix = store::UvidStore::table_prefix(&path);
@@ -292,6 +292,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 ///     output: Path to output file (None for stdout). If ends in .vcf.gz, bgzf-compressed.
 ///     use_uuid: If True, emit UUIDv5 instead of UVID hex.
 ///     assembly: Assembly override ("GRCh37", "GRCh38", etc.). None to auto-detect from header.
+///     normalize: If True, normalise variants (Tan et al. 2015) before encoding.
+///         Requires a reference genome file in the data directory.
 ///
 /// Returns:
 ///     Number of data records processed.
@@ -299,13 +301,15 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// Raises:
 ///     AssemblyNotDetectedError: If assembly cannot be detected and no override given.
 ///     OSError: On I/O errors.
+///     ValueError: On normalization errors (e.g. reference genome not found).
 #[pyfunction]
-#[pyo3(name = "vcf_passthrough", signature = (input, output = None, use_uuid = false, assembly = None))]
+#[pyo3(name = "vcf_passthrough", signature = (input, output = None, use_uuid = false, assembly = None, normalize = false))]
 fn py_vcf_passthrough(
     input: PathBuf,
     output: Option<PathBuf>,
     use_uuid: bool,
     assembly: Option<&str>,
+    normalize: bool,
 ) -> PyResult<u64> {
     let asm_override = match assembly {
         Some(s) => {
@@ -315,14 +319,16 @@ fn py_vcf_passthrough(
         None => None,
     };
 
-    vcf_passthrough::vcf_passthrough(&input, output.as_deref(), use_uuid, asm_override).map_err(
-        |e| match e {
+    vcf_passthrough::vcf_passthrough(&input, output.as_deref(), use_uuid, asm_override, normalize)
+        .map_err(|e| match e {
             vcf_passthrough::VcfPassthroughError::AssemblyNotDetected => {
                 AssemblyNotDetectedError::new_err(e.to_string())
             }
             vcf_passthrough::VcfPassthroughError::Io(io_err) => {
                 PyIOError::new_err(format!("{}", io_err))
             }
-        },
-    )
+            vcf_passthrough::VcfPassthroughError::Normalize(norm_err) => {
+                PyValueError::new_err(format!("Normalization error: {}", norm_err))
+            }
+        })
 }

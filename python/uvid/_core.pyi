@@ -24,8 +24,16 @@ def vcf_passthrough(
     output: str | PathLike[str] | None = None,
     use_uuid: bool = False,
     assembly: str | None = None,
+    normalize: bool = False,
 ) -> int:
     """Process a VCF file, replacing the ID column with UVID identifiers.
+
+    When ``normalize`` is ``True``, variants are normalised using the
+    Tan et al. 2015 algorithm (left-alignment + parsimonious trimming)
+    before UVID encoding, and the output POS/REF/ALT columns reflect
+    the normalised representation.  A reference genome file for the
+    resolved assembly must be present in the data directory
+    (``UVID_DATA_DIR`` or the platform default).
 
     Args:
         input: Path to input VCF file (.vcf or .vcf.gz).
@@ -34,6 +42,8 @@ def vcf_passthrough(
         use_uuid: When ``True``, emit UUIDv5 representation instead of UVID hex.
         assembly: Assembly override (e.g. ``"GRCh37"``, ``"GRCh38"``).
             ``None`` to auto-detect from the VCF header.
+        normalize: When ``True``, normalise variants before encoding.
+            Requires a reference genome file in the data directory.
 
     Returns:
         The number of data records processed.
@@ -41,6 +51,7 @@ def vcf_passthrough(
     Raises:
         AssemblyNotDetectedError: If assembly cannot be detected and no override given.
         OSError: On I/O errors.
+        ValueError: On normalisation errors (e.g. reference genome not found).
     """
     ...
 

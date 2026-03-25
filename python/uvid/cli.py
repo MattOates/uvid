@@ -50,8 +50,21 @@ def vcf(
         "-a",
         help="Override assembly (GRCh37, GRCh38). Auto-detected from header if omitted.",
     ),
+    normalize: bool = typer.Option(
+        False,
+        "--normalize",
+        "-n",
+        help="Normalise variants (Tan et al. 2015) before encoding. "
+        "Requires a reference genome in the data directory.",
+    ),
 ) -> None:
-    """Process a VCF file, replacing the ID column with UVID identifiers."""
+    """Process a VCF file, replacing the ID column with UVID identifiers.
+
+    When --normalize is given, variants are left-aligned and trimmed before
+    encoding.  The output POS/REF/ALT columns reflect the normalised form.
+    A reference genome file for the assembly must be present in the data
+    directory (set UVID_DATA_DIR or use the platform default).
+    """
     if not input.exists():
         typer.echo(f"Error: VCF file not found: {input}", err=True)
         raise typer.Exit(1)
@@ -62,6 +75,7 @@ def vcf(
             output,
             use_uuid=uuid,
             assembly=assembly,
+            normalize=normalize,
         )
     except AssemblyNotDetectedError:
         typer.echo(

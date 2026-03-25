@@ -2,8 +2,13 @@
 /// UVID identifiers (or optionally UUIDv5 representations), and write the
 /// modified VCF to stdout or a file.
 ///
+/// When a reference genome is provided, variants are normalised using the
+/// Tan et al. 2015 algorithm before UVID encoding, and the output VCF's
+/// POS, REF, and ALT columns reflect the normalised representation.
+///
 /// Uses line-based processing for maximum throughput — only the ID column
-/// (column 2, 0-indexed) is modified; every other byte passes through unchanged.
+/// (column 2, 0-indexed) is modified (and optionally POS/REF/ALT when
+/// normalising); every other byte passes through unchanged.
 use std::fmt;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
@@ -11,6 +16,7 @@ use std::path::Path;
 use noodles::bgzf;
 
 use crate::assembly::{Assembly, ChrIndex};
+use crate::normalize;
 use crate::uvid128::Uvid128;
 
 // ---------------------------------------------------------------------------
@@ -24,6 +30,8 @@ pub enum VcfPassthroughError {
     AssemblyNotDetected,
     /// An I/O error occurred while reading or writing.
     Io(io::Error),
+    /// A normalization error occurred.
+    Normalize(normalize::NormalizeError),
 }
 
 impl fmt::Display for VcfPassthroughError {
@@ -35,6 +43,7 @@ impl fmt::Display for VcfPassthroughError {
                  Use --assembly to specify GRCh37 or GRCh38."
             ),
             VcfPassthroughError::Io(e) => write!(f, "I/O error: {}", e),
+            VcfPassthroughError::Normalize(e) => write!(f, "Normalization error: {}", e),
         }
     }
 }
@@ -44,6 +53,12 @@ impl std::error::Error for VcfPassthroughError {}
 impl From<io::Error> for VcfPassthroughError {
     fn from(e: io::Error) -> Self {
         VcfPassthroughError::Io(e)
+    }
+}
+
+impl From<normalize::NormalizeError> for VcfPassthroughError {
+    fn from(e: normalize::NormalizeError) -> Self {
+        VcfPassthroughError::Normalize(e)
     }
 }
 
@@ -112,6 +127,10 @@ fn match_assembly_pattern(s: &str) -> Option<Assembly> {
 ///   If the path ends in `.vcf.gz`, output is bgzf-compressed.
 /// - `use_uuid`         — when true, emit UUIDv5 representation instead of UVID hex
 /// - `assembly_override`— when `Some`, skip header detection and use this assembly
+/// - `normalize`        — when true, normalise variants using Tan et al. 2015
+///   before encoding.  The reference genome is auto-discovered from the data
+///   directory using the resolved assembly name.  The output POS/REF/ALT
+///   columns are updated to reflect the normalised representation.
 ///
 /// Returns the number of data records processed.
 pub fn vcf_passthrough(
@@ -119,6 +138,7 @@ pub fn vcf_passthrough(
     output: Option<&Path>,
     use_uuid: bool,
     assembly_override: Option<Assembly>,
+    normalize: bool,
 ) -> Result<u64, VcfPassthroughError> {
     // Detect bgzf by magic bytes
     let is_bgzf = {
@@ -135,11 +155,11 @@ pub fn vcf_passthrough(
         let file = std::fs::File::open(input)?;
         let decoder = bgzf::io::Reader::new(file);
         let reader = BufReader::new(decoder);
-        passthrough_from_reader(reader, output, use_uuid, assembly_override)
+        passthrough_from_reader(reader, output, use_uuid, assembly_override, normalize)
     } else {
         let file = std::fs::File::open(input)?;
         let reader = BufReader::new(file);
-        passthrough_from_reader(reader, output, use_uuid, assembly_override)
+        passthrough_from_reader(reader, output, use_uuid, assembly_override, normalize)
     }
 }
 
@@ -149,6 +169,7 @@ fn passthrough_from_reader<R: BufRead>(
     output: Option<&Path>,
     use_uuid: bool,
     assembly_override: Option<Assembly>,
+    do_normalize: bool,
 ) -> Result<u64, VcfPassthroughError> {
     // ---- Phase 1: read and pass through header lines, detect assembly ----
     let mut header_lines: Vec<String> = Vec::new();
@@ -175,6 +196,15 @@ fn passthrough_from_reader<R: BufRead>(
         Some(asm) => asm,
         None => detect_assembly_from_header(&header_lines)
             .ok_or(VcfPassthroughError::AssemblyNotDetected)?,
+    };
+
+    // Open reference genome if normalisation requested
+    let mut reference: Option<Box<dyn normalize::ReferenceGenome>> = if do_normalize {
+        let rg = normalize::open_reference_for_assembly(&assembly.to_string())
+            .map_err(|e| VcfPassthroughError::Normalize(normalize::NormalizeError::Reference(e)))?;
+        Some(rg)
+    } else {
+        None
     };
 
     // ---- Phase 2: open writer ----
@@ -231,69 +261,9 @@ fn passthrough_from_reader<R: BufRead>(
     // ---- Phase 3: process data lines ----
     let mut count: u64 = 0;
 
-    // Helper closure to process one data line
-    let process_line = |line: &str, w: &mut OutputWriter| -> Result<(), VcfPassthroughError> {
-        // Split into tab-separated fields. We need at least 5 columns
-        // (CHROM, POS, ID, REF, ALT) to do anything useful.
-        let fields: Vec<&str> = line.splitn(6, '\t').collect();
-        if fields.len() < 5 {
-            // Malformed line — pass through unchanged
-            w.write_all(line.as_bytes())?;
-            w.write_all(b"\n")?;
-            return Ok(());
-        }
-
-        let chrom = fields[0];
-        let pos_str = fields[1];
-        // fields[2] is the ID column we'll replace
-        let ref_seq = fields[3];
-        let alt_field = fields[4];
-
-        // Parse CHROM
-        let chr_idx = ChrIndex::from_name(chrom);
-
-        // Parse POS
-        let pos: Option<u32> = pos_str.parse().ok();
-
-        // Compute new ID
-        let new_id = match (chr_idx, pos) {
-            (Some(chr), Some(p)) if p > 0 => {
-                compute_id(chr, p, ref_seq, alt_field, assembly, use_uuid)
-            }
-            _ => {
-                // Can't encode — keep original ID
-                eprintln!(
-                    "Warning: cannot encode variant at {}:{} — keeping original ID",
-                    chrom, pos_str
-                );
-                fields[2].to_string()
-            }
-        };
-
-        // Reconstruct the line: CHROM \t POS \t NEW_ID \t REF \t ALT [\t rest]
-        w.write_all(fields[0].as_bytes())?;
-        w.write_all(b"\t")?;
-        w.write_all(fields[1].as_bytes())?;
-        w.write_all(b"\t")?;
-        w.write_all(new_id.as_bytes())?;
-        w.write_all(b"\t")?;
-        w.write_all(fields[3].as_bytes())?;
-        w.write_all(b"\t")?;
-        // fields[4] might be just ALT, or fields[5] has the rest (QUAL onwards)
-        if fields.len() == 6 {
-            w.write_all(fields[4].as_bytes())?;
-            w.write_all(b"\t")?;
-            w.write_all(fields[5].as_bytes())?;
-        } else {
-            w.write_all(fields[4].as_bytes())?;
-        }
-        w.write_all(b"\n")?;
-        Ok(())
-    };
-
     // Process the first data line (already read during header scan)
     if let Some(ref line) = first_data_line {
-        process_line(line, &mut writer)?;
+        process_line(line, &mut writer, assembly, use_uuid, &mut reference)?;
         count += 1;
     }
 
@@ -308,7 +278,7 @@ fn passthrough_from_reader<R: BufRead>(
         if trimmed.is_empty() {
             continue;
         }
-        process_line(trimmed, &mut writer)?;
+        process_line(trimmed, &mut writer, assembly, use_uuid, &mut reference)?;
         count += 1;
     }
 
@@ -325,41 +295,155 @@ fn passthrough_from_reader<R: BufRead>(
     Ok(count)
 }
 
-/// Compute the ID string for a single VCF record.
+/// Process one VCF data line: parse fields, optionally normalise, compute
+/// UVID, and write the (possibly modified) line.
+fn process_line<W: Write>(
+    line: &str,
+    w: &mut W,
+    assembly: Assembly,
+    use_uuid: bool,
+    reference: &mut Option<Box<dyn normalize::ReferenceGenome>>,
+) -> Result<(), VcfPassthroughError> {
+    // Split into tab-separated fields. We need at least 5 columns
+    // (CHROM, POS, ID, REF, ALT) to do anything useful.
+    let fields: Vec<&str> = line.splitn(6, '\t').collect();
+    if fields.len() < 5 {
+        // Malformed line — pass through unchanged
+        w.write_all(line.as_bytes())?;
+        w.write_all(b"\n")?;
+        return Ok(());
+    }
+
+    let chrom = fields[0];
+    let pos_str = fields[1];
+    // fields[2] is the ID column we'll replace
+    let ref_seq = fields[3];
+    let alt_field = fields[4];
+
+    // Parse CHROM
+    let chr_idx = ChrIndex::from_name(chrom);
+
+    // Parse POS
+    let pos: Option<u32> = pos_str.parse().ok();
+
+    match (chr_idx, pos) {
+        (Some(chr), Some(p)) if p > 0 => {
+            // Normalise + compute IDs per allele
+            let (new_id, norm_pos, norm_ref, norm_alt) = compute_id_normalized(
+                chrom, chr, p, ref_seq, alt_field, assembly, use_uuid, reference,
+            )?;
+
+            // Reconstruct line with (possibly normalised) POS/REF/ALT
+            w.write_all(fields[0].as_bytes())?;
+            w.write_all(b"\t")?;
+            w.write_all(norm_pos.as_bytes())?;
+            w.write_all(b"\t")?;
+            w.write_all(new_id.as_bytes())?;
+            w.write_all(b"\t")?;
+            w.write_all(norm_ref.as_bytes())?;
+            w.write_all(b"\t")?;
+            if fields.len() == 6 {
+                w.write_all(norm_alt.as_bytes())?;
+                w.write_all(b"\t")?;
+                w.write_all(fields[5].as_bytes())?;
+            } else {
+                w.write_all(norm_alt.as_bytes())?;
+            }
+            w.write_all(b"\n")?;
+        }
+        _ => {
+            // Can't encode — pass through unchanged
+            eprintln!(
+                "Warning: cannot encode variant at {}:{} — keeping original ID",
+                chrom, pos_str
+            );
+            w.write_all(line.as_bytes())?;
+            w.write_all(b"\n")?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Compute the ID string for a single VCF record, optionally normalising
+/// each allele first.
 ///
-/// Handles multi-allelic ALTs (comma-separated) — produces one UVID per
-/// allele, joined with `_`. If ALT is `.`, returns `.`.
-fn compute_id(
+/// Returns `(id_string, pos_string, ref_string, alt_string)`.
+/// When no normalisation is active, POS/REF/ALT are returned unchanged.
+/// When normalisation is active, each allele is normalised independently;
+/// the returned POS/REF use the first allele's normalised values (for
+/// multiallelic records, alleles that normalise to different positions
+/// are each encoded at their own normalised position).
+fn compute_id_normalized(
+    chrom: &str,
     chr: ChrIndex,
     pos: u32,
     ref_seq: &str,
     alt_field: &str,
     assembly: Assembly,
     use_uuid: bool,
-) -> String {
+    reference: &mut Option<Box<dyn normalize::ReferenceGenome>>,
+) -> Result<(String, String, String, String), VcfPassthroughError> {
     // ALT = "." means no alternate allele
     if alt_field == "." {
-        return ".".to_string();
+        return Ok((
+            ".".to_string(),
+            pos.to_string(),
+            ref_seq.to_string(),
+            alt_field.to_string(),
+        ));
     }
 
     let alt_alleles: Vec<&str> = alt_field.split(',').collect();
     let mut ids: Vec<String> = Vec::with_capacity(alt_alleles.len());
+    let mut norm_alts: Vec<String> = Vec::with_capacity(alt_alleles.len());
 
-    for alt in &alt_alleles {
+    // For the output POS/REF, use the first allele's normalised values.
+    // (In practice, most records are bi-allelic.)
+    let mut out_pos = pos;
+    let mut out_ref = ref_seq.to_string();
+
+    for (i, alt) in alt_alleles.iter().enumerate() {
         let alt_trimmed = alt.trim();
-        if alt_trimmed == "." || alt_trimmed == "*" {
-            // Symbolic / missing — skip encoding
+        if alt_trimmed == "."
+            || alt_trimmed == "*"
+            || alt_trimmed.starts_with('<')
+            || alt_trimmed.contains('[')
+            || alt_trimmed.contains(']')
+        {
+            // Symbolic / missing / breakend — skip normalisation + encoding
             ids.push(".".to_string());
+            norm_alts.push(alt_trimmed.to_string());
             continue;
         }
 
-        match Uvid128::encode(
-            chr,
-            pos,
-            ref_seq.as_bytes(),
-            alt_trimmed.as_bytes(),
-            assembly,
-        ) {
+        // Normalise if reference is available
+        let (enc_pos, enc_ref, enc_alt) = if let Some(ref mut rg) = reference {
+            let nv = normalize::normalize(
+                chrom,
+                pos,
+                ref_seq.as_bytes(),
+                alt_trimmed.as_bytes(),
+                rg.as_mut(),
+            )?;
+            (nv.pos, nv.ref_seq, nv.alt_seq)
+        } else {
+            (
+                pos,
+                ref_seq.as_bytes().to_vec(),
+                alt_trimmed.as_bytes().to_vec(),
+            )
+        };
+
+        // Use the first allele's normalised POS/REF for the output record
+        if i == 0 {
+            out_pos = enc_pos;
+            out_ref = String::from_utf8_lossy(&enc_ref).to_string();
+        }
+
+        norm_alts.push(String::from_utf8_lossy(&enc_alt).to_string());
+
+        match Uvid128::encode(chr, enc_pos, &enc_ref, &enc_alt, assembly) {
             Some(uvid) => {
                 if use_uuid {
                     ids.push(uvid.to_uuid5().to_string());
@@ -368,13 +452,17 @@ fn compute_id(
                 }
             }
             None => {
-                // Only happens for invalid chr/pos (not for long sequences)
                 ids.push(".".to_string());
             }
         }
     }
 
-    ids.join("_")
+    Ok((
+        ids.join("_"),
+        out_pos.to_string(),
+        out_ref,
+        norm_alts.join(","),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +472,10 @@ fn compute_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Mutex to serialize tests that manipulate UVID_DATA_DIR, since
+    // env vars are process-global and tests run in parallel.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     // -- Assembly detection tests --
 
@@ -465,6 +557,22 @@ mod tests {
     }
 
     // -- compute_id tests --
+
+    /// Helper: call compute_id_normalized without a reference (no normalization).
+    fn compute_id(
+        chr: ChrIndex,
+        pos: u32,
+        ref_seq: &str,
+        alt_field: &str,
+        assembly: Assembly,
+        use_uuid: bool,
+    ) -> String {
+        let (id, _, _, _) = compute_id_normalized(
+            "test", chr, pos, ref_seq, alt_field, assembly, use_uuid, &mut None,
+        )
+        .unwrap();
+        id
+    }
 
     #[test]
     fn test_compute_id_single_alt() {
@@ -551,6 +659,7 @@ mod tests {
             Some(&out_path),
             false,
             Some(Assembly::GRCh38),
+            false,
         )
         .unwrap();
 
@@ -597,7 +706,7 @@ mod tests {
         let input_tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(input_tmp.path(), &vcf_data).unwrap();
 
-        let result = vcf_passthrough(input_tmp.path(), None, false, None);
+        let result = vcf_passthrough(input_tmp.path(), None, false, None, false);
         assert!(result.is_err());
         match result.unwrap_err() {
             VcfPassthroughError::AssemblyNotDetected => {} // expected
@@ -617,6 +726,7 @@ mod tests {
             Some(out_tmp.path()),
             false,
             None, // no override — should detect from header
+            false,
         )
         .unwrap();
 
@@ -635,6 +745,7 @@ mod tests {
             Some(out_tmp.path()),
             true, // UUID mode
             None,
+            false,
         )
         .unwrap();
 
@@ -663,7 +774,7 @@ mod tests {
         let out_dir = tempfile::tempdir().unwrap();
         let out_path = out_dir.path().join("output.vcf.gz");
 
-        vcf_passthrough(input_tmp.path(), Some(&out_path), false, None).unwrap();
+        vcf_passthrough(input_tmp.path(), Some(&out_path), false, None, false).unwrap();
 
         // Verify the output file starts with gzip magic bytes
         let bytes = std::fs::read(&out_path).unwrap();
@@ -687,7 +798,7 @@ mod tests {
         std::fs::write(input_tmp.path(), &vcf_data).unwrap();
 
         let out_tmp = tempfile::NamedTempFile::new().unwrap();
-        vcf_passthrough(input_tmp.path(), Some(out_tmp.path()), false, None).unwrap();
+        vcf_passthrough(input_tmp.path(), Some(out_tmp.path()), false, None, false).unwrap();
 
         let output = std::fs::read_to_string(out_tmp.path()).unwrap();
         let data_lines: Vec<&str> = output.lines().filter(|l| !l.starts_with('#')).collect();
@@ -714,11 +825,159 @@ mod tests {
         let out1 = tempfile::NamedTempFile::new().unwrap();
         let out2 = tempfile::NamedTempFile::new().unwrap();
 
-        vcf_passthrough(input_tmp.path(), Some(out1.path()), false, None).unwrap();
-        vcf_passthrough(input_tmp.path(), Some(out2.path()), false, None).unwrap();
+        vcf_passthrough(input_tmp.path(), Some(out1.path()), false, None, false).unwrap();
+        vcf_passthrough(input_tmp.path(), Some(out2.path()), false, None, false).unwrap();
 
         let content1 = std::fs::read_to_string(out1.path()).unwrap();
         let content2 = std::fs::read_to_string(out2.path()).unwrap();
         assert_eq!(content1, content2);
+    }
+
+    // -- Normalised passthrough tests --
+
+    /// Write a minimal FASTA file and its .fai index to a temp directory,
+    /// named as GRCh38.fa so that `open_reference_for_assembly("GRCh38")`
+    /// finds it when `UVID_DATA_DIR` points at this directory.
+    ///
+    /// The reference contains chr1 with a poly-A run at positions 1-20 that
+    /// exercises left-alignment for indels.
+    fn write_test_reference(dir: &std::path::Path) {
+        let fa_path = dir.join("GRCh38.fa");
+        // chr1: 40 bases. Positions 1-20 are poly-A, followed by CCGGTTAACCGGTTAACCGG
+        let fasta = ">chr1\nAAAAAAAAAAAAAAAAAAAAACCGGTTAACCGGTTAACCGG\n";
+        std::fs::write(&fa_path, fasta).unwrap();
+
+        // FAI format: name \t length \t offset \t bases_per_line \t bytes_per_line
+        let fai = "chr1\t40\t6\t40\t41\n";
+        std::fs::write(dir.join("GRCh38.fa.fai"), fai).unwrap();
+    }
+
+    fn make_norm_test_vcf() -> String {
+        // VCF with a right-aligned deletion in the poly-A region of chr1.
+        // Original: pos=10, REF=AA, ALT=A (deletion of one A at pos 10-11)
+        // After normalisation (left-alignment through poly-A run):
+        //   pos=1, REF=AA, ALT=A (leftmost representation)
+        let mut vcf = String::new();
+        vcf.push_str("##fileformat=VCFv4.3\n");
+        vcf.push_str("##reference=GRCh38\n");
+        vcf.push_str("##contig=<ID=chr1,length=40>\n");
+        vcf.push_str("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n");
+        // Right-aligned 1bp deletion in poly-A run (should left-align)
+        vcf.push_str("chr1\t10\t.\tAA\tA\t30\tPASS\tDP=50\n");
+        // SNV — should pass through unchanged
+        vcf.push_str("chr1\t25\t.\tC\tT\t45\tPASS\tDP=60\n");
+        // Symbolic ALT — should skip normalisation
+        vcf.push_str("chr1\t5\t.\tA\t<DEL>\t10\tPASS\tDP=10\n");
+        vcf
+    }
+
+    #[test]
+    fn test_passthrough_normalised_indel_left_aligns() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        write_test_reference(dir.path());
+
+        // Point UVID_DATA_DIR at our temp directory
+        std::env::set_var("UVID_DATA_DIR", dir.path());
+
+        let vcf_data = make_norm_test_vcf();
+        let input_tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_tmp.path(), &vcf_data).unwrap();
+
+        let out_tmp = tempfile::NamedTempFile::new().unwrap();
+        let count = vcf_passthrough(
+            input_tmp.path(),
+            Some(out_tmp.path()),
+            false,
+            None, // auto-detect GRCh38 from header
+            true, // normalise
+        )
+        .unwrap();
+
+        // Clean up env var
+        std::env::remove_var("UVID_DATA_DIR");
+
+        assert_eq!(count, 3);
+
+        let output = std::fs::read_to_string(out_tmp.path()).unwrap();
+        let data_lines: Vec<&str> = output.lines().filter(|l| !l.starts_with('#')).collect();
+
+        // Line 1: indel should be left-aligned from pos 10 to pos 1
+        let fields: Vec<&str> = data_lines[0].split('\t').collect();
+        assert_eq!(fields[0], "chr1", "chrom preserved");
+        assert_eq!(fields[1], "1", "pos left-aligned from 10 to 1");
+        assert_eq!(fields[3], "AA", "ref after left-alignment");
+        assert_eq!(fields[4], "A", "alt after left-alignment");
+        assert_ne!(fields[2], ".", "ID should be a UVID");
+        assert_eq!(fields[2].len(), 35, "UVID hex format");
+
+        // Line 2: SNV passes through unchanged
+        let fields2: Vec<&str> = data_lines[1].split('\t').collect();
+        assert_eq!(fields2[1], "25", "SNV pos unchanged");
+        assert_eq!(fields2[3], "C", "SNV ref unchanged");
+        assert_eq!(fields2[4], "T", "SNV alt unchanged");
+
+        // Line 3: symbolic ALT skips normalisation, ID should be "."
+        let fields3: Vec<&str> = data_lines[2].split('\t').collect();
+        assert_eq!(fields3[1], "5", "symbolic pos unchanged");
+        assert_eq!(fields3[3], "A", "symbolic ref unchanged");
+        assert_eq!(fields3[4], "<DEL>", "symbolic alt unchanged");
+        assert_eq!(fields3[2], ".", "symbolic allele gets no UVID");
+    }
+
+    #[test]
+    fn test_passthrough_without_normalize_no_change() {
+        // The same VCF without normalize=true should leave POS/REF/ALT unchanged
+        let vcf_data = make_norm_test_vcf();
+        let input_tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_tmp.path(), &vcf_data).unwrap();
+
+        let out_tmp = tempfile::NamedTempFile::new().unwrap();
+        vcf_passthrough(
+            input_tmp.path(),
+            Some(out_tmp.path()),
+            false,
+            Some(Assembly::GRCh38),
+            false, // no normalisation
+        )
+        .unwrap();
+
+        let output = std::fs::read_to_string(out_tmp.path()).unwrap();
+        let data_lines: Vec<&str> = output.lines().filter(|l| !l.starts_with('#')).collect();
+
+        // Indel should keep original pos 10
+        let fields: Vec<&str> = data_lines[0].split('\t').collect();
+        assert_eq!(fields[1], "10", "pos unchanged without normalize");
+        assert_eq!(fields[3], "AA", "ref unchanged without normalize");
+        assert_eq!(fields[4], "A", "alt unchanged without normalize");
+    }
+
+    #[test]
+    fn test_passthrough_normalised_deterministic() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        write_test_reference(dir.path());
+        std::env::set_var("UVID_DATA_DIR", dir.path());
+
+        let vcf_data = make_norm_test_vcf();
+        let input_tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_tmp.path(), &vcf_data).unwrap();
+
+        let out1 = tempfile::NamedTempFile::new().unwrap();
+        let out2 = tempfile::NamedTempFile::new().unwrap();
+
+        vcf_passthrough(input_tmp.path(), Some(out1.path()), false, None, true).unwrap();
+        vcf_passthrough(input_tmp.path(), Some(out2.path()), false, None, true).unwrap();
+
+        std::env::remove_var("UVID_DATA_DIR");
+
+        let content1 = std::fs::read_to_string(out1.path()).unwrap();
+        let content2 = std::fs::read_to_string(out2.path()).unwrap();
+        assert_eq!(
+            content1, content2,
+            "normalised passthrough is deterministic"
+        );
     }
 }

@@ -11,6 +11,7 @@ use noodles::vcf::variant::record::samples::series::value::genotype::Phasing;
 use serde_json::{json, Map, Value};
 
 use crate::assembly::{Assembly, ChrIndex};
+use crate::normalize;
 use crate::uvid128::Uvid128;
 
 /// A site-level record (shared across samples).
@@ -49,7 +50,24 @@ pub struct ParsedVcf {
 }
 
 /// Parse a VCF file (plain or bgzf-compressed) and decompose multi-allelic sites.
-pub fn parse_vcf(path: &Path, assembly: Assembly) -> Result<ParsedVcf, Box<dyn std::error::Error>> {
+///
+/// When `normalize` is true, each variant is normalised using the
+/// Tan et al. 2015 algorithm before UVID encoding. The reference genome
+/// is auto-discovered from the data directory using the assembly name.
+pub fn parse_vcf(
+    path: &Path,
+    assembly: Assembly,
+    normalize: bool,
+) -> Result<ParsedVcf, Box<dyn std::error::Error>> {
+    // Open reference genome if normalisation requested
+    let mut reference_genome: Option<Box<dyn normalize::ReferenceGenome>> = if normalize {
+        Some(normalize::open_reference_for_assembly(
+            &assembly.to_string(),
+        )?)
+    } else {
+        None
+    };
+
     let is_bgzf = {
         let mut peek = std::fs::File::open(path)?;
         let mut magic = [0u8; 2];
@@ -64,17 +82,18 @@ pub fn parse_vcf(path: &Path, assembly: Assembly) -> Result<ParsedVcf, Box<dyn s
         let file = std::fs::File::open(path)?;
         let decoder = bgzf::io::Reader::new(file);
         let buf_reader = std::io::BufReader::new(decoder);
-        parse_vcf_from_reader(buf_reader, assembly)
+        parse_vcf_from_reader(buf_reader, assembly, &mut reference_genome)
     } else {
         let file = std::fs::File::open(path)?;
         let buf_reader = std::io::BufReader::new(file);
-        parse_vcf_from_reader(buf_reader, assembly)
+        parse_vcf_from_reader(buf_reader, assembly, &mut reference_genome)
     }
 }
 
 fn parse_vcf_from_reader<R: BufRead>(
     reader: R,
     assembly: Assembly,
+    reference: &mut Option<Box<dyn normalize::ReferenceGenome>>,
 ) -> Result<ParsedVcf, Box<dyn std::error::Error>> {
     // Use the noodles VCF reader to handle header + record parsing properly
     let mut vcf_reader = vcf::io::Reader::new(reader);
@@ -152,13 +171,37 @@ fn parse_vcf_from_reader<R: BufRead>(
         };
 
         for (alt_idx, alt_allele) in alts_to_process.iter().enumerate() {
+            let is_symbolic = alt_allele == "."
+                || alt_allele == "*"
+                || alt_allele.starts_with('<')
+                || alt_allele.contains('[')
+                || alt_allele.contains(']');
+
             let alt_bytes = if alt_allele == "." || alt_allele == "*" {
                 b".".to_vec()
             } else {
                 alt_allele.as_bytes().to_vec()
             };
 
-            let uvid = match Uvid128::encode(chr, pos, ref_seq.as_bytes(), &alt_bytes, assembly) {
+            // Normalise if reference is available and allele is not symbolic
+            let (enc_pos, enc_ref, enc_alt) = if !is_symbolic {
+                if let Some(ref mut rg) = reference {
+                    let nv = normalize::normalize(
+                        &chr_name,
+                        pos,
+                        ref_seq.as_bytes(),
+                        alt_allele.as_bytes(),
+                        rg.as_mut(),
+                    )?;
+                    (nv.pos, nv.ref_seq, nv.alt_seq)
+                } else {
+                    (pos, ref_seq.as_bytes().to_vec(), alt_bytes)
+                }
+            } else {
+                (pos, ref_seq.as_bytes().to_vec(), alt_bytes)
+            };
+
+            let uvid = match Uvid128::encode(chr, enc_pos, &enc_ref, &enc_alt, assembly) {
                 Some(u) => u,
                 None => continue,
             };
