@@ -376,6 +376,7 @@ fn process_line<W: Write>(
 /// the returned POS/REF use the first allele's normalised values (for
 /// multiallelic records, alleles that normalise to different positions
 /// are each encoded at their own normalised position).
+#[allow(clippy::too_many_arguments)]
 fn compute_id_normalized(
     chrom: &str,
     chr: ChrIndex,

@@ -53,12 +53,8 @@ pub struct TwoBitReference {
 impl TwoBitReference {
     /// Open a `.2bit` file and read it entirely into memory.
     pub fn open(path: &Path) -> Result<Self, ReferenceError> {
-        let inner = twobit::TwoBitFile::open_and_read(path).map_err(|e| {
-            ReferenceError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        let inner = twobit::TwoBitFile::open_and_read(path)
+            .map_err(|e| ReferenceError::Io(std::io::Error::other(e.to_string())))?;
         Ok(TwoBitReference { inner })
     }
 }
@@ -78,7 +74,7 @@ impl ReferenceGenome for TwoBitReference {
                 if msg.contains("not found") || msg.contains("unknown sequence") {
                     ReferenceError::ChromosomeNotFound(chrom.to_string())
                 } else {
-                    ReferenceError::Io(std::io::Error::new(std::io::ErrorKind::Other, msg))
+                    ReferenceError::Io(std::io::Error::other(msg))
                 }
             })?;
         // twobit returns a String; convert to uppercase bytes
