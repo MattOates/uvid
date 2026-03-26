@@ -16,7 +16,7 @@ use std::path::Path;
 
 use noodles::bgzf;
 
-use crate::assembly::{Assembly, ChrIndex};
+use crate::assembly::{classify_chrom, detect_contig_scheme, Assembly, ChrIndex, ContigScheme};
 use crate::normalize;
 use crate::uvid128::Uvid128;
 
@@ -116,6 +116,21 @@ fn match_assembly_pattern(s: &str) -> Option<Assembly> {
     }
 }
 
+/// Extract the contig ID from a `##contig=<ID=...>` header line.
+///
+/// Returns `None` if the line is not a contig header or lacks an `ID=` key.
+fn extract_contig_id(line: &str) -> Option<&str> {
+    let body = line.strip_prefix("##contig=<")?.strip_suffix('>')?;
+    for field in body.split(',') {
+        if let Some(id) = field.strip_prefix("ID=") {
+            if !id.is_empty() {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Core passthrough
 // ---------------------------------------------------------------------------
@@ -200,6 +215,22 @@ fn passthrough_from_reader<R: BufRead>(
             .ok_or(VcfPassthroughError::AssemblyNotDetected)?,
     };
 
+    // Detect contig naming scheme from header (or first data record)
+    let contig_ids: Vec<&str> = header_lines
+        .iter()
+        .filter_map(|l| extract_contig_id(l))
+        .collect();
+    let scheme = if contig_ids.is_empty() {
+        // No contig headers — sniff from the first data record's CHROM field
+        first_data_line
+            .as_deref()
+            .and_then(|line| line.split('\t').next())
+            .map(classify_chrom)
+            .unwrap_or(ContigScheme::Bare)
+    } else {
+        detect_contig_scheme(&contig_ids)
+    };
+
     // Open reference genome if normalisation requested
     let mut reference: Option<Box<dyn normalize::ReferenceGenome>> = if do_normalize {
         let rg = normalize::open_reference_for_assembly(&assembly.to_string())
@@ -265,7 +296,14 @@ fn passthrough_from_reader<R: BufRead>(
 
     // Process the first data line (already read during header scan)
     if let Some(ref line) = first_data_line {
-        process_line(line, &mut writer, assembly, use_uuid, &mut reference)?;
+        process_line(
+            line,
+            &mut writer,
+            assembly,
+            scheme,
+            use_uuid,
+            &mut reference,
+        )?;
         count += 1;
     }
 
@@ -280,7 +318,14 @@ fn passthrough_from_reader<R: BufRead>(
         if trimmed.is_empty() {
             continue;
         }
-        process_line(trimmed, &mut writer, assembly, use_uuid, &mut reference)?;
+        process_line(
+            trimmed,
+            &mut writer,
+            assembly,
+            scheme,
+            use_uuid,
+            &mut reference,
+        )?;
         count += 1;
     }
 
@@ -303,6 +348,7 @@ fn process_line<W: Write>(
     line: &str,
     w: &mut W,
     assembly: Assembly,
+    scheme: ContigScheme,
     use_uuid: bool,
     reference: &mut Option<Box<dyn normalize::ReferenceGenome>>,
 ) -> Result<(), VcfPassthroughError> {
@@ -322,8 +368,8 @@ fn process_line<W: Write>(
     let ref_seq = fields[3];
     let alt_field = fields[4];
 
-    // Parse CHROM
-    let chr_idx = ChrIndex::from_name(chrom);
+    // Parse CHROM using detected naming scheme
+    let chr_idx = ChrIndex::resolve(chrom, scheme, assembly);
 
     // Parse POS
     let pos: Option<u32> = pos_str.parse().ok();
@@ -331,9 +377,8 @@ fn process_line<W: Write>(
     match (chr_idx, pos) {
         (Some(chr), Some(p)) if p > 0 => {
             // Normalise + compute IDs per allele
-            let (new_id, norm_pos, norm_ref, norm_alt) = compute_id_normalized(
-                chrom, chr, p, ref_seq, alt_field, assembly, use_uuid, reference,
-            )?;
+            let (new_id, norm_pos, norm_ref, norm_alt) =
+                compute_id_normalized(chr, p, ref_seq, alt_field, assembly, use_uuid, reference)?;
 
             // Reconstruct line with (possibly normalised) POS/REF/ALT
             w.write_all(fields[0].as_bytes())?;
@@ -378,7 +423,6 @@ fn process_line<W: Write>(
 /// are each encoded at their own normalised position).
 #[allow(clippy::too_many_arguments)]
 fn compute_id_normalized(
-    chrom: &str,
     chr: ChrIndex,
     pos: u32,
     ref_seq: &str,
@@ -422,8 +466,11 @@ fn compute_id_normalized(
 
         // Normalise if reference is available
         let (enc_pos, enc_ref, enc_alt) = if let Some(ref mut rg) = reference {
+            // Use UCSC-style name (e.g. "chr1") for reference genome lookups,
+            // regardless of the VCF's naming convention.
+            let ref_chrom = chr.to_ucsc_name().unwrap_or("?");
             let nv = normalize::normalize(
-                chrom,
+                ref_chrom,
                 pos,
                 ref_seq.as_bytes(),
                 alt_trimmed.as_bytes(),
@@ -570,10 +617,9 @@ mod tests {
         assembly: Assembly,
         use_uuid: bool,
     ) -> String {
-        let (id, _, _, _) = compute_id_normalized(
-            "test", chr, pos, ref_seq, alt_field, assembly, use_uuid, &mut None,
-        )
-        .unwrap();
+        let (id, _, _, _) =
+            compute_id_normalized(chr, pos, ref_seq, alt_field, assembly, use_uuid, &mut None)
+                .unwrap();
         id
     }
 

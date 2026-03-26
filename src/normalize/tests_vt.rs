@@ -24,8 +24,9 @@ mod tests {
     /// Attempt to open the b37 reference for chr20.
     ///
     /// The vt test data uses bare chromosome names (e.g. "20") which
-    /// correspond to the b37/GRCh37 assembly.  We try both "GRCh37" and
-    /// "b37" assembly names.
+    /// correspond to the b37/GRCh37 assembly.  UCSC `.2bit` files use
+    /// chr-prefixed names ("chr20"), so we use that when querying the
+    /// reference.  We try both "GRCh37" and "b37" assembly names.
     ///
     /// Returns `None` if no reference file is found, causing the test
     /// to be skipped rather than failed.
@@ -35,6 +36,11 @@ mod tests {
             .or_else(|_| open_reference_for_assembly("b37"))
             .ok()
     }
+
+    /// The UCSC .2bit reference uses chr-prefixed contig names regardless
+    /// of assembly, so we always query with "chr20" even though the vt
+    /// test data uses the bare b37 name "20".
+    const VT_CHROM: &str = "chr20";
 
     /// All 194 test cases from vt normalize test/normalize/01_IN.vcf
     /// and test/normalize/01_OUT.vcf.
@@ -315,7 +321,7 @@ mod tests {
             VT_TEST_CASES.iter().enumerate()
         {
             let result = match normalize(
-                "20",
+                VT_CHROM,
                 in_pos,
                 in_ref.as_bytes(),
                 in_alt.as_bytes(),
@@ -324,9 +330,10 @@ mod tests {
                 Ok(r) => r,
                 Err(e) => {
                     failures.push(format!(
-                        "  [{}/{}] 20:{} {}/{} => ERROR: {}",
+                        "  [{}/{}] {}:{} {}/{} => ERROR: {}",
                         i + 1,
                         total,
+                        VT_CHROM,
                         in_pos,
                         in_ref,
                         in_alt,
@@ -345,9 +352,10 @@ mod tests {
                 passed += 1;
             } else {
                 let msg = format!(
-                    "  [{}/{}] 20:{} {}/{} => got {}:{}/{}, expected {}:{}/{}",
+                    "  [{}/{}] {}:{} {}/{} => got {}:{}/{}, expected {}:{}/{}",
                     i + 1,
                     total,
+                    VT_CHROM,
                     in_pos,
                     in_ref,
                     in_alt,
@@ -391,13 +399,18 @@ mod tests {
         let mut modified_count = 0;
         for &(in_pos, in_ref, in_alt, _, _, _) in VT_TEST_CASES.iter() {
             let result = normalize(
-                "20",
+                VT_CHROM,
                 in_pos,
                 in_ref.as_bytes(),
                 in_alt.as_bytes(),
                 reference.as_mut(),
             )
-            .unwrap_or_else(|e| panic!("normalize 20:{} {}/{}: {}", in_pos, in_ref, in_alt, e));
+            .unwrap_or_else(|e| {
+                panic!(
+                    "normalize {}:{} {}/{}: {}",
+                    VT_CHROM, in_pos, in_ref, in_alt, e
+                )
+            });
             if result.was_modified {
                 modified_count += 1;
             }
