@@ -15,7 +15,7 @@ use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 use std::path::PathBuf;
 
-use assembly::{Assembly, ChrIndex};
+use assembly::{classify_chrom, Assembly, ChrIndex};
 use uvid128::Uvid128;
 
 // Custom Python exceptions
@@ -35,12 +35,12 @@ impl PyUvid {
     #[staticmethod]
     #[pyo3(signature = (chr, pos, ref_seq, alt_seq, assembly = "GRCh38"))]
     fn encode(chr: &str, pos: u32, ref_seq: &str, alt_seq: &str, assembly: &str) -> PyResult<Self> {
-        let chr_idx = ChrIndex::from_name(chr)
-            .ok_or_else(|| PyValueError::new_err(format!("Invalid chromosome: {}", chr)))?;
-
         let asm: Assembly = assembly
             .parse()
             .map_err(|e: String| PyValueError::new_err(e))?;
+
+        let chr_idx = ChrIndex::resolve(chr, classify_chrom(chr), asm)
+            .ok_or_else(|| PyValueError::new_err(format!("Invalid chromosome: {}", chr)))?;
 
         let uvid = Uvid128::encode(chr_idx, pos, ref_seq.as_bytes(), alt_seq.as_bytes(), asm)
             .ok_or_else(|| {
@@ -109,12 +109,12 @@ impl PyUvid {
         end_pos: u32,
         assembly: &str,
     ) -> PyResult<(PyUvid, PyUvid)> {
-        let chr_idx = ChrIndex::from_name(chr)
-            .ok_or_else(|| PyValueError::new_err(format!("Invalid chromosome: {}", chr)))?;
-
         let asm: Assembly = assembly
             .parse()
             .map_err(|e: String| PyValueError::new_err(e))?;
+
+        let chr_idx = ChrIndex::resolve(chr, classify_chrom(chr), asm)
+            .ok_or_else(|| PyValueError::new_err(format!("Invalid chromosome: {}", chr)))?;
 
         let (lower, upper) = Uvid128::range(chr_idx, start_pos, end_pos, asm).ok_or_else(|| {
             PyValueError::new_err("Failed to compute range: invalid chromosome or position")
@@ -232,12 +232,12 @@ impl PyCollection {
         end_pos: u32,
         assembly: &str,
     ) -> PyResult<Bound<'py, pyo3::types::PyList>> {
-        let chr_idx = ChrIndex::from_name(chr)
-            .ok_or_else(|| PyValueError::new_err(format!("Invalid chromosome: {}", chr)))?;
-
         let asm: Assembly = assembly
             .parse()
             .map_err(|e: String| PyValueError::new_err(e))?;
+
+        let chr_idx = ChrIndex::resolve(chr, classify_chrom(chr), asm)
+            .ok_or_else(|| PyValueError::new_err(format!("Invalid chromosome: {}", chr)))?;
 
         let results = self
             .inner

@@ -10,7 +10,7 @@ use noodles::vcf;
 use noodles::vcf::variant::record::samples::series::value::genotype::Phasing;
 use serde_json::{json, Map, Value};
 
-use crate::assembly::{Assembly, ChrIndex};
+use crate::assembly::{detect_contig_scheme, Assembly, ChrIndex, ContigScheme};
 use crate::normalize;
 use crate::uvid128::Uvid128;
 
@@ -109,6 +109,15 @@ fn parse_vcf_from_reader<R: BufRead>(
         String::from_utf8_lossy(&buf).to_string()
     };
 
+    // Detect contig naming scheme from header contig IDs
+    let contig_ids: Vec<String> = header.contigs().keys().map(|k| k.to_string()).collect();
+    let contig_id_refs: Vec<&str> = contig_ids.iter().map(|s| s.as_str()).collect();
+    let scheme = if contig_id_refs.is_empty() {
+        ContigScheme::Bare // will be refined per-record if needed
+    } else {
+        detect_contig_scheme(&contig_id_refs)
+    };
+
     // Extract sample names from header
     let sample_names: Vec<String> = header
         .sample_names()
@@ -135,7 +144,7 @@ fn parse_vcf_from_reader<R: BufRead>(
         }
 
         let chr_name = record_buf.reference_sequence_name().to_string();
-        let chr = match ChrIndex::from_name(&chr_name) {
+        let chr = match ChrIndex::resolve(&chr_name, scheme, assembly) {
             Some(c) => c,
             None => continue,
         };
@@ -187,8 +196,11 @@ fn parse_vcf_from_reader<R: BufRead>(
             // Normalise if reference is available and allele is not symbolic
             let (enc_pos, enc_ref, enc_alt) = if !is_symbolic {
                 if let Some(ref mut rg) = reference {
+                    // Use UCSC-style name (e.g. "chr1") for reference genome lookups,
+                    // regardless of the VCF's naming convention.
+                    let ref_chrom = chr.to_ucsc_name().unwrap_or("?");
                     let nv = normalize::normalize(
-                        &chr_name,
+                        ref_chrom,
                         pos,
                         ref_seq.as_bytes(),
                         alt_allele.as_bytes(),

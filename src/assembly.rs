@@ -63,6 +63,76 @@ pub struct ChromosomeInfo {
     pub refseq: &'static str,
 }
 
+/// Contig naming convention used in a VCF file's CHROM column.
+///
+/// VCF files use different naming schemes depending on the reference genome
+/// and pipeline that produced them.  Detecting the scheme from the VCF header
+/// (or first data record) allows [`ChrIndex::resolve`] to map any CHROM value
+/// to a chromosome index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContigScheme {
+    /// Bare numeric/letter names: `"1"`, `"2"`, ..., `"X"`, `"Y"`, `"MT"`.
+    ///
+    /// Used by b37, humanG1Kv37, 1000 Genomes, Ensembl, and GRC assemblies.
+    Bare,
+    /// UCSC chr-prefixed names: `"chr1"`, `"chr2"`, ..., `"chrX"`, `"chrY"`, `"chrM"`.
+    ///
+    /// Used by hg19, hg38, Dragen, DeepVariant, and most clinical pipelines.
+    Ucsc,
+    /// NCBI RefSeq accessions: `"NC_000001.11"`, `"NC_000023.11"`, `"NC_012920.1"`.
+    ///
+    /// Used by dbSNP VCF, ClinVar VCF, and NCBI RefSeq reference FASTAs.
+    /// Version numbers are assembly-specific (e.g. `.11` for GRCh38, `.10`
+    /// for GRCh37 on chr1).
+    RefSeq,
+    /// GenBank accessions: `"CM000663.2"`, `"CM000664.2"`, etc.
+    ///
+    /// Rare in practice; appears when GenBank assembly FASTAs (`GCA_*`) are
+    /// used as the reference.
+    GenBank,
+}
+
+/// Classify a single CHROM string into its naming scheme.
+///
+/// Uses prefix-based heuristics (case-insensitive):
+/// - `NC_` → [`ContigScheme::RefSeq`]
+/// - `CM` followed by a digit → [`ContigScheme::GenBank`]
+/// - `chr` → [`ContigScheme::Ucsc`]
+/// - anything else → [`ContigScheme::Bare`]
+pub fn classify_chrom(name: &str) -> ContigScheme {
+    let upper = name.to_ascii_uppercase();
+    if upper.starts_with("NC_") {
+        ContigScheme::RefSeq
+    } else if upper.starts_with("CM") && upper.as_bytes().get(2).is_some_and(|b| b.is_ascii_digit())
+    {
+        ContigScheme::GenBank
+    } else if upper.starts_with("CHR") {
+        ContigScheme::Ucsc
+    } else {
+        ContigScheme::Bare
+    }
+}
+
+/// Detect the contig naming scheme from a set of VCF contig IDs.
+///
+/// Classifies each ID and returns the most specific scheme observed.
+/// Priority: RefSeq > GenBank > Ucsc > Bare.  If `contig_ids` is empty,
+/// returns [`ContigScheme::Bare`] as the default.
+pub fn detect_contig_scheme(contig_ids: &[&str]) -> ContigScheme {
+    let mut best = ContigScheme::Bare;
+    for id in contig_ids {
+        let scheme = classify_chrom(id);
+        // Return immediately on the most specific schemes
+        match scheme {
+            ContigScheme::RefSeq => return ContigScheme::RefSeq,
+            ContigScheme::GenBank => return ContigScheme::GenBank,
+            ContigScheme::Ucsc => best = ContigScheme::Ucsc,
+            ContigScheme::Bare => {}
+        }
+    }
+    best
+}
+
 /// Chromosome index in the UVID encoding (5-bit field, 0-24).
 ///
 /// chr1=0, chr2=1, ..., chr22=21, chrX=22, chrY=23, chrM=24
@@ -114,6 +184,67 @@ impl ChrIndex {
         CHROMOSOME_NAMES.get(self.0 as usize).copied()
     }
 
+    /// Convert a chromosome index to its UCSC-style name (`"chr1"`, `"chrX"`, `"chrM"`).
+    ///
+    /// This is the naming convention used by UCSC `.2bit` reference genome files
+    /// (e.g. `hg38.2bit`).  Use this when querying a reference genome for
+    /// normalization.
+    pub fn to_ucsc_name(self) -> Option<&'static str> {
+        UCSC_CHROMOSOME_NAMES.get(self.0 as usize).copied()
+    }
+
+    /// Parse a RefSeq accession to a chromosome index using [`ChromosomeInfo`] data.
+    ///
+    /// Performs **strict version matching**: the full accession including version
+    /// suffix must match exactly (e.g. `"NC_000001.11"` matches chr1 in GRCh38
+    /// but not in GRCh37, which uses `"NC_000001.10"`).
+    pub fn from_refseq(accession: &str, assembly: Assembly) -> Option<Self> {
+        for (i, info) in chromosomes(assembly).iter().enumerate() {
+            if info.refseq == accession {
+                return Some(ChrIndex(i as u8));
+            }
+        }
+        None
+    }
+
+    /// Parse a GenBank accession to a chromosome index using [`ChromosomeInfo`] data.
+    ///
+    /// Performs **strict version matching**: the full accession including version
+    /// suffix must match exactly (e.g. `"CM000663.2"` matches chr1 in GRCh38
+    /// but not in GRCh37, which uses `"CM000663.1"`).
+    ///
+    /// Note: chrM has no GenBank accession (`genbank: None` in [`ChromosomeInfo`]).
+    pub fn from_genbank(accession: &str, assembly: Assembly) -> Option<Self> {
+        for (i, info) in chromosomes(assembly).iter().enumerate() {
+            if info.genbank == Some(accession) {
+                return Some(ChrIndex(i as u8));
+            }
+        }
+        None
+    }
+
+    /// Resolve a CHROM string to a chromosome index using the detected
+    /// naming scheme and assembly context.
+    ///
+    /// For [`ContigScheme::Bare`] and [`ContigScheme::Ucsc`], delegates to
+    /// [`from_name`](Self::from_name) (which handles both).  For
+    /// [`ContigScheme::RefSeq`] and [`ContigScheme::GenBank`], uses
+    /// assembly-specific accession lookup with strict version matching.
+    ///
+    /// In all cases, tries an exact match first, then a case-insensitive
+    /// fallback (since VCFs in the wild use `Chr1`, `CHR1`, `chr1`, etc.).
+    pub fn resolve(name: &str, scheme: ContigScheme, assembly: Assembly) -> Option<Self> {
+        match scheme {
+            ContigScheme::Bare | ContigScheme::Ucsc => {
+                Self::from_name(name).or_else(|| Self::from_name(&name.to_ascii_lowercase()))
+            }
+            ContigScheme::RefSeq => Self::from_refseq(name, assembly)
+                .or_else(|| Self::from_refseq(&name.to_ascii_uppercase(), assembly)),
+            ContigScheme::GenBank => Self::from_genbank(name, assembly)
+                .or_else(|| Self::from_genbank(&name.to_ascii_uppercase(), assembly)),
+        }
+    }
+
     /// Convert from the 5-bit field value.
     pub fn from_bits(bits: u8) -> Option<Self> {
         if bits <= Self::MAX {
@@ -142,6 +273,16 @@ impl fmt::Display for ChrIndex {
 pub const CHROMOSOME_NAMES: &[&str] = &[
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17",
     "18", "19", "20", "21", "22", "X", "Y", "M",
+];
+
+/// UCSC-style chromosome names indexed by ChrIndex value.
+///
+/// These match the contig names used in UCSC `.2bit` reference genome files
+/// (e.g. `hg38.2bit`, `hg19.2bit`).  Note: UCSC uses `"chrM"` (not `"chrMT"`).
+pub const UCSC_CHROMOSOME_NAMES: &[&str] = &[
+    "chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11",
+    "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chr20", "chr21",
+    "chr22", "chrX", "chrY", "chrM",
 ];
 
 /// GRCh38 chromosome lengths and accessions.
@@ -853,6 +994,395 @@ mod tests {
                 "Max linear position exceeds u32 for {:?}",
                 assembly
             );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // ContigScheme, classify_chrom, detect_contig_scheme
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_classify_chrom_bare() {
+        assert_eq!(classify_chrom("1"), ContigScheme::Bare);
+        assert_eq!(classify_chrom("22"), ContigScheme::Bare);
+        assert_eq!(classify_chrom("X"), ContigScheme::Bare);
+        assert_eq!(classify_chrom("Y"), ContigScheme::Bare);
+        assert_eq!(classify_chrom("MT"), ContigScheme::Bare);
+    }
+
+    #[test]
+    fn test_classify_chrom_ucsc() {
+        assert_eq!(classify_chrom("chr1"), ContigScheme::Ucsc);
+        assert_eq!(classify_chrom("chrX"), ContigScheme::Ucsc);
+        assert_eq!(classify_chrom("chrM"), ContigScheme::Ucsc);
+        assert_eq!(classify_chrom("chrMT"), ContigScheme::Ucsc);
+        // Case variants
+        assert_eq!(classify_chrom("Chr1"), ContigScheme::Ucsc);
+        assert_eq!(classify_chrom("CHR1"), ContigScheme::Ucsc);
+        assert_eq!(classify_chrom("ChrX"), ContigScheme::Ucsc);
+    }
+
+    #[test]
+    fn test_classify_chrom_refseq() {
+        assert_eq!(classify_chrom("NC_000001.11"), ContigScheme::RefSeq);
+        assert_eq!(classify_chrom("NC_000023.11"), ContigScheme::RefSeq);
+        assert_eq!(classify_chrom("NC_012920.1"), ContigScheme::RefSeq);
+        // Case variant (unlikely but tolerated)
+        assert_eq!(classify_chrom("nc_000001.11"), ContigScheme::RefSeq);
+    }
+
+    #[test]
+    fn test_classify_chrom_genbank() {
+        assert_eq!(classify_chrom("CM000663.2"), ContigScheme::GenBank);
+        assert_eq!(classify_chrom("CM000686.1"), ContigScheme::GenBank);
+        // Case variant
+        assert_eq!(classify_chrom("cm000663.2"), ContigScheme::GenBank);
+    }
+
+    #[test]
+    fn test_detect_contig_scheme_empty() {
+        assert_eq!(detect_contig_scheme(&[]), ContigScheme::Bare);
+    }
+
+    #[test]
+    fn test_detect_contig_scheme_bare() {
+        assert_eq!(
+            detect_contig_scheme(&["1", "2", "3", "X", "Y", "MT"]),
+            ContigScheme::Bare
+        );
+    }
+
+    #[test]
+    fn test_detect_contig_scheme_ucsc() {
+        assert_eq!(
+            detect_contig_scheme(&["chr1", "chr2", "chrX"]),
+            ContigScheme::Ucsc
+        );
+    }
+
+    #[test]
+    fn test_detect_contig_scheme_refseq() {
+        assert_eq!(
+            detect_contig_scheme(&["NC_000001.11", "NC_000002.12"]),
+            ContigScheme::RefSeq
+        );
+    }
+
+    #[test]
+    fn test_detect_contig_scheme_genbank() {
+        assert_eq!(
+            detect_contig_scheme(&["CM000663.2", "CM000664.2"]),
+            ContigScheme::GenBank
+        );
+    }
+
+    #[test]
+    fn test_detect_contig_scheme_mixed_prefers_specific() {
+        // If both bare and UCSC-like contigs appear, UCSC wins
+        assert_eq!(
+            detect_contig_scheme(&["chr1", "some_scaffold"]),
+            ContigScheme::Ucsc
+        );
+        // If RefSeq appears alongside bare, RefSeq wins
+        assert_eq!(
+            detect_contig_scheme(&["1", "NC_000001.11"]),
+            ContigScheme::RefSeq
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // ChrIndex::from_refseq
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_from_refseq_grch38() {
+        assert_eq!(
+            ChrIndex::from_refseq("NC_000001.11", Assembly::GRCh38),
+            Some(ChrIndex(0))
+        );
+        assert_eq!(
+            ChrIndex::from_refseq("NC_000022.11", Assembly::GRCh38),
+            Some(ChrIndex(21))
+        );
+        assert_eq!(
+            ChrIndex::from_refseq("NC_000023.11", Assembly::GRCh38),
+            Some(ChrIndex(22)), // chrX
+        );
+        assert_eq!(
+            ChrIndex::from_refseq("NC_000024.10", Assembly::GRCh38),
+            Some(ChrIndex(23)), // chrY
+        );
+        assert_eq!(
+            ChrIndex::from_refseq("NC_012920.1", Assembly::GRCh38),
+            Some(ChrIndex(24)), // chrM
+        );
+    }
+
+    #[test]
+    fn test_from_refseq_grch37() {
+        assert_eq!(
+            ChrIndex::from_refseq("NC_000001.10", Assembly::GRCh37),
+            Some(ChrIndex(0))
+        );
+        assert_eq!(
+            ChrIndex::from_refseq("NC_000023.10", Assembly::GRCh37),
+            Some(ChrIndex(22)), // chrX
+        );
+        // chrM is the same accession+version in both assemblies
+        assert_eq!(
+            ChrIndex::from_refseq("NC_012920.1", Assembly::GRCh37),
+            Some(ChrIndex(24)),
+        );
+    }
+
+    #[test]
+    fn test_from_refseq_version_mismatch() {
+        // GRCh37 version for chr1 should NOT match GRCh38
+        assert_eq!(
+            ChrIndex::from_refseq("NC_000001.10", Assembly::GRCh38),
+            None
+        );
+        // GRCh38 version for chr1 should NOT match GRCh37
+        assert_eq!(
+            ChrIndex::from_refseq("NC_000001.11", Assembly::GRCh37),
+            None
+        );
+    }
+
+    #[test]
+    fn test_from_refseq_invalid() {
+        assert_eq!(ChrIndex::from_refseq("NC_999999.1", Assembly::GRCh38), None);
+        assert_eq!(ChrIndex::from_refseq("chr1", Assembly::GRCh38), None);
+        assert_eq!(ChrIndex::from_refseq("", Assembly::GRCh38), None);
+    }
+
+    // -------------------------------------------------------------------
+    // ChrIndex::from_genbank
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_from_genbank_grch38() {
+        assert_eq!(
+            ChrIndex::from_genbank("CM000663.2", Assembly::GRCh38),
+            Some(ChrIndex(0))
+        );
+        assert_eq!(
+            ChrIndex::from_genbank("CM000685.2", Assembly::GRCh38),
+            Some(ChrIndex(22)), // chrX
+        );
+        assert_eq!(
+            ChrIndex::from_genbank("CM000686.2", Assembly::GRCh38),
+            Some(ChrIndex(23)), // chrY
+        );
+    }
+
+    #[test]
+    fn test_from_genbank_grch37() {
+        assert_eq!(
+            ChrIndex::from_genbank("CM000663.1", Assembly::GRCh37),
+            Some(ChrIndex(0))
+        );
+    }
+
+    #[test]
+    fn test_from_genbank_version_mismatch() {
+        assert_eq!(ChrIndex::from_genbank("CM000663.1", Assembly::GRCh38), None);
+        assert_eq!(ChrIndex::from_genbank("CM000663.2", Assembly::GRCh37), None);
+    }
+
+    #[test]
+    fn test_from_genbank_chrm_has_no_genbank() {
+        // chrM has genbank: None in both assemblies
+        assert_eq!(
+            ChrIndex::from_genbank("NC_012920.1", Assembly::GRCh38),
+            None
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // ChrIndex::to_ucsc_name
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_to_ucsc_name() {
+        assert_eq!(ChrIndex(0).to_ucsc_name(), Some("chr1"));
+        assert_eq!(ChrIndex(21).to_ucsc_name(), Some("chr22"));
+        assert_eq!(ChrIndex(22).to_ucsc_name(), Some("chrX"));
+        assert_eq!(ChrIndex(23).to_ucsc_name(), Some("chrY"));
+        assert_eq!(ChrIndex(24).to_ucsc_name(), Some("chrM"));
+        assert_eq!(ChrIndex(25).to_ucsc_name(), None);
+    }
+
+    #[test]
+    fn test_ucsc_name_roundtrip() {
+        // Every UCSC name should resolve back to the same ChrIndex
+        for i in 0..=ChrIndex::MAX {
+            let idx = ChrIndex(i);
+            let ucsc = idx.to_ucsc_name().unwrap();
+            assert_eq!(
+                ChrIndex::from_name(ucsc),
+                Some(idx),
+                "roundtrip failed for {}",
+                ucsc
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // ChrIndex::resolve (scheme-aware, case-insensitive)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_bare() {
+        let asm = Assembly::GRCh38;
+        assert_eq!(
+            ChrIndex::resolve("1", ContigScheme::Bare, asm),
+            Some(ChrIndex(0))
+        );
+        assert_eq!(
+            ChrIndex::resolve("X", ContigScheme::Bare, asm),
+            Some(ChrIndex(22))
+        );
+        assert_eq!(
+            ChrIndex::resolve("MT", ContigScheme::Bare, asm),
+            Some(ChrIndex(24))
+        );
+    }
+
+    #[test]
+    fn test_resolve_ucsc() {
+        let asm = Assembly::GRCh38;
+        assert_eq!(
+            ChrIndex::resolve("chr1", ContigScheme::Ucsc, asm),
+            Some(ChrIndex(0))
+        );
+        assert_eq!(
+            ChrIndex::resolve("chrX", ContigScheme::Ucsc, asm),
+            Some(ChrIndex(22))
+        );
+        assert_eq!(
+            ChrIndex::resolve("chrM", ContigScheme::Ucsc, asm),
+            Some(ChrIndex(24))
+        );
+    }
+
+    #[test]
+    fn test_resolve_case_insensitive_ucsc() {
+        let asm = Assembly::GRCh38;
+        assert_eq!(
+            ChrIndex::resolve("Chr1", ContigScheme::Ucsc, asm),
+            Some(ChrIndex(0))
+        );
+        assert_eq!(
+            ChrIndex::resolve("CHR1", ContigScheme::Ucsc, asm),
+            Some(ChrIndex(0))
+        );
+        assert_eq!(
+            ChrIndex::resolve("ChrX", ContigScheme::Ucsc, asm),
+            Some(ChrIndex(22))
+        );
+        assert_eq!(
+            ChrIndex::resolve("CHRX", ContigScheme::Ucsc, asm),
+            Some(ChrIndex(22))
+        );
+        assert_eq!(
+            ChrIndex::resolve("ChrM", ContigScheme::Ucsc, asm),
+            Some(ChrIndex(24))
+        );
+        assert_eq!(
+            ChrIndex::resolve("CHRMT", ContigScheme::Ucsc, asm),
+            Some(ChrIndex(24))
+        );
+    }
+
+    #[test]
+    fn test_resolve_case_insensitive_bare() {
+        let asm = Assembly::GRCh38;
+        // Lowercase x/y should work
+        assert_eq!(
+            ChrIndex::resolve("x", ContigScheme::Bare, asm),
+            Some(ChrIndex(22))
+        );
+        assert_eq!(
+            ChrIndex::resolve("y", ContigScheme::Bare, asm),
+            Some(ChrIndex(23))
+        );
+        // Mt (mixed case)
+        assert_eq!(
+            ChrIndex::resolve("Mt", ContigScheme::Bare, asm),
+            Some(ChrIndex(24))
+        );
+        assert_eq!(
+            ChrIndex::resolve("mT", ContigScheme::Bare, asm),
+            Some(ChrIndex(24))
+        );
+    }
+
+    #[test]
+    fn test_resolve_refseq() {
+        assert_eq!(
+            ChrIndex::resolve("NC_000001.11", ContigScheme::RefSeq, Assembly::GRCh38),
+            Some(ChrIndex(0))
+        );
+        assert_eq!(
+            ChrIndex::resolve("NC_000001.10", ContigScheme::RefSeq, Assembly::GRCh37),
+            Some(ChrIndex(0))
+        );
+        // Version mismatch
+        assert_eq!(
+            ChrIndex::resolve("NC_000001.10", ContigScheme::RefSeq, Assembly::GRCh38),
+            None
+        );
+    }
+
+    #[test]
+    fn test_resolve_genbank() {
+        assert_eq!(
+            ChrIndex::resolve("CM000663.2", ContigScheme::GenBank, Assembly::GRCh38),
+            Some(ChrIndex(0))
+        );
+        assert_eq!(
+            ChrIndex::resolve("CM000663.1", ContigScheme::GenBank, Assembly::GRCh37),
+            Some(ChrIndex(0))
+        );
+        // Version mismatch
+        assert_eq!(
+            ChrIndex::resolve("CM000663.1", ContigScheme::GenBank, Assembly::GRCh38),
+            None
+        );
+    }
+
+    #[test]
+    fn test_resolve_refseq_all_grch38_chromosomes() {
+        let asm = Assembly::GRCh38;
+        let chroms = chromosomes(asm);
+        for (i, info) in chroms.iter().enumerate() {
+            let result = ChrIndex::resolve(info.refseq, ContigScheme::RefSeq, asm);
+            assert_eq!(
+                result,
+                Some(ChrIndex(i as u8)),
+                "RefSeq {} should resolve to ChrIndex({})",
+                info.refseq,
+                i,
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_genbank_all_grch38_chromosomes() {
+        let asm = Assembly::GRCh38;
+        let chroms = chromosomes(asm);
+        for (i, info) in chroms.iter().enumerate() {
+            if let Some(gb) = info.genbank {
+                let result = ChrIndex::resolve(gb, ContigScheme::GenBank, asm);
+                assert_eq!(
+                    result,
+                    Some(ChrIndex(i as u8)),
+                    "GenBank {} should resolve to ChrIndex({})",
+                    gb,
+                    i,
+                );
+            }
         }
     }
 }
