@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["open_reference"],"struct":["FastaReference","InlineReference","TwoBitReference"],"trait":["ReferenceGenome"]};
