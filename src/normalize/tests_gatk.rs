@@ -12,6 +12,33 @@
 //! - `GRCh38.2bit`  (preferred, ~800 MB)
 //! - `GRCh38.fa` + `GRCh38.fa.fai`
 //!
+//! ## Divergence from GATK expected output
+//!
+//! Our normalizer implements the Tan et al. 2015 algorithm (the same
+//! approach used by bcftools and vt), which fully left-aligns every
+//! indel to the leftmost possible position.  GATK's
+//! `LeftAlignAndTrimVariants` has two known limitations that cause it
+//! to stop short:
+//!
+//! 1. **`--max-indel-length` (default 200)** — GATK skips
+//!    normalization entirely for indels whose allele length exceeds
+//!    this threshold.  Our normalizer has no such limit.
+//!    Affects GATK test cases 9 and 10 (296 bp insertion/deletion).
+//!
+//! 2. **`distanceToLastVariant` constraint** — GATK refuses to
+//!    left-align a variant past the end position of the previously
+//!    emitted variant on the same contig.  This prevents full
+//!    left-alignment when a decomposed multiallelic or nearby SNP is
+//!    present.  The GATK team consider this a bug; see
+//!    <https://github.com/broadinstitute/gatk/pull/9305> (Dec 2025,
+//!    open) and the kachulis review comments on
+//!    <https://github.com/broadinstitute/gatk/pull/6427>.
+//!    Affects GATK test cases 4a and 16.
+//!
+//! In each divergent case the expected values below reflect the
+//! *fully* left-aligned result, verified against the GRCh38 reference
+//! genome.
+//!
 //! Source: GATK LeftAlignAndTrimVariants test suite
 //!   (Apache License 2.0, https://github.com/broadinstitute/gatk)
 //! Reference: Broad Institute, Genome Analysis Toolkit (GATK)
@@ -67,10 +94,18 @@ mod tests {
             19285500, "A", "C",
             "SNV pass-through"),
 
-        // Case 4a: Multiallelic decomposed — insertion allele (already normalized)
+        // Case 4a: Multiallelic decomposed — insertion allele
+        //
+        // GATK divergence: GATK reports this as "already normalized"
+        // (T/TT at 19883345) because its `distanceToLastVariant`
+        // constraint prevents left-aligning past the previously
+        // emitted variant at this site.  Full left-alignment places
+        // the T insertion at the start of a poly-T run
+        // (19883338–19883359), anchored by the C at 19883337.
+        // See: https://github.com/broadinstitute/gatk/pull/9305
         ("chr20", 19883345, "T", "TT",
-            19883345, "T", "TT",
-            "multiallelic insertion allele, already normalized"),
+            19883337, "C", "CT",
+            "multiallelic insertion allele, left-aligns in poly-T (GATK stops short)"),
 
         // Case 4b: Multiallelic decomposed — SNV allele (already normalized)
         ("chr20", 19883345, "T", "C",
@@ -102,7 +137,13 @@ mod tests {
             19885702, "CGAAAA", "C",
             "deletion left-aligns 9bp and trims"),
 
-        // Case 9: 296bp insertion, already left-aligned
+        // Case 9: 296bp insertion, left-aligns through tandem repeat
+        //
+        // GATK divergence: GATK skips this variant entirely because
+        // it exceeds `--max-indel-length` (default 200 bp).  Full
+        // left-alignment shifts the insertion 329 bp upstream through
+        // ~6 copies of a 57 bp tandem repeat, anchored by the A at
+        // 63669644.
         ("chr20", 63669973, "G",
             "GGACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
              GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
@@ -110,16 +151,22 @@ mod tests {
              GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
              GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
              GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG",
-            63669973, "G",
-            "GGACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
+            63669644, "A",
+            "ACCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
              GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
              GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
              GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
              GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
-             GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG",
-            "296bp insertion already left-aligned"),
+             GACAGACGTTTCGCCAAGATGGGTGGAATGGCCAGTTAACCACTGGGAGAGCATCCG\
+             GACAGACGTTTCG",
+            "296bp insertion left-aligns through tandem repeat (GATK skips >200bp)"),
 
-        // Case 10: 296bp deletion, already left-aligned
+        // Case 10: 296bp deletion, left-aligns through tandem repeat
+        //
+        // GATK divergence: same `--max-indel-length` skip as case 9.
+        // Full left-alignment shifts the deletion 382 bp upstream
+        // through ~6 copies of a ~59 bp tandem repeat, anchored by
+        // the T at 64011805.
         ("chr20", 64012187,
             "TACACCTACGAGAGGAGGACAGGAAGTCTCACGGCTTCTTTCTTTGCTAGTAGAAATGAT\
              ACACCTACGAGAGGAGGACAGGAAGTCTCACGGCTTCTTTCTTTGCTAGTAGAAATGAT\
@@ -127,14 +174,14 @@ mod tests {
              ACACCTACGAGAGGAGGACAGGAAGTCTCACGGCTTCTTTCTTTGCTAGTAGAAATGAT\
              ACACCTACGAGAGGAGGACAGGAAGTCTCACGGCTTCTTTCTTTGCTAGTAGAAATGAT",
             "T",
-            64012187,
-            "TACACCTACGAGAGGAGGACAGGAAGTCTCACGGCTTCTTTCTTTGCTAGTAGAAATGAT\
-             ACACCTACGAGAGGAGGACAGGAAGTCTCACGGCTTCTTTCTTTGCTAGTAGAAATGAT\
-             ACACCTACGAGAGGAGGACAGGAAGTCTCACGGCTTCTTTCTTTGCTAGTAGAAATGAT\
-             ACACCTACGAGAGGAGGACAGGAAGTCTCACGGCTTCTTTCTTTGCTAGTAGAAATGAT\
-             ACACCTACGAGAGGAGGACAGGAAGTCTCACGGCTTCTTTCTTTGCTAGTAGAAATGAT",
+            64011805,
+            "TGGCTTCTTTCTTTGCTAGTAGAAATGATACACCTACGAGAGGAGGACAGGAAGTCTCAC\
+             GGCTTCTTTCTTTGCTAGTAGAAATGATACACCTACGAGAGGAGGACAGGAAGTCTCAC\
+             GGCTTCTTTCTTTGCTAGTAGAAATGATACACCTACGAGAGGAGGACAGGAAGTCTCAC\
+             GGCTTCTTTCTTTGCTAGTAGAAATGATACACCTACGAGAGGAGGACAGGAAGTCTCAC\
+             GGCTTCTTTCTTTGCTAGTAGAAATGATACACCTACGAGAGGAGGACAGGAAGTCTCAC",
             "T",
-            "296bp deletion already left-aligned"),
+            "296bp deletion left-aligns through tandem repeat (GATK skips >200bp)"),
 
         // Case 11: 6bp insertion in TG repeat, left-aligns 6 positions
         ("chr21", 8405579, "G", "GTGTGTG",
@@ -161,14 +208,19 @@ mod tests {
             13255296, "A", "G",
             "SNV pass-through"),
 
-        // Case 16: 2bp deletion that left-aligns past a nearby SNP (tricky!)
+        // Case 16: 2bp deletion that left-aligns past a nearby SNP
         //
-        // GATK notes this as "particularly tricky": the deletion AAA→A at
-        // chr21:13255301 left-aligns to AAA→A at chr21:13255297, passing a
-        // SNP A→G at chr21:13255296.
+        // GATK divergence: GATK stops left-aligning at chr21:13255297
+        // because of its `distanceToLastVariant` constraint — the
+        // previous variant (SNP A→G at chr21:13255296, case 15) blocks
+        // further movement.  Full left-alignment places the deletion
+        // at the start of the poly-A run (13255290–13255304), anchored
+        // by the C at 13255289.
+        // See: https://github.com/broadinstitute/gatk/pull/9305
+        //      https://github.com/broadinstitute/gatk/pull/6427
         ("chr21", 13255301, "AAA", "A",
-            13255297, "AAA", "A",
-            "deletion left-aligns past SNP (tricky)"),
+            13255289, "CAA", "C",
+            "deletion left-aligns past SNP to poly-A start (GATK stops at SNP)"),
 
         // Case 17: 44bp deletion in TTCCC repeat, left-aligns 189 positions
         ("chr21", 39584006,
@@ -264,8 +316,12 @@ mod tests {
     /// Of the 19 per-allele cases (17 GATK records with 2 multiallelic
     /// records decomposed into 2 alleles each = 19 allele-level cases):
     /// - SNVs: 4 unchanged (cases 3, 4b, 7b, 15)
-    /// - Already normalized: 5 unchanged (cases 4a, 7a, 9, 10, 14)
-    /// - Modified: 10 (cases 1, 2, 5, 6, 8, 11, 12, 13, 16, 17)
+    /// - Already normalized: 2 unchanged (cases 7a, 14)
+    /// - Modified: 13 (cases 1, 2, 4a, 5, 6, 8, 9, 10, 11, 12, 13, 16, 17)
+    ///
+    /// Note: GATK reports only 10 modified because it skips indels
+    /// >200 bp (cases 9, 10) and constrains left-alignment by
+    /// `distanceToLastVariant` (case 4a).
     #[test]
     fn test_gatk_normalize_modification_count() {
         let mut reference = match try_open_grch38_reference() {
@@ -296,10 +352,10 @@ mod tests {
             }
         }
 
-        // 10 of 19 per-allele cases should be modified
+        // 13 of 19 per-allele cases should be modified
         assert_eq!(
-            modified_count, 10,
-            "expected 10 modified alleles (GATK left-align+trim), got {}",
+            modified_count, 13,
+            "expected 13 modified alleles (full left-align+trim), got {}",
             modified_count
         );
     }

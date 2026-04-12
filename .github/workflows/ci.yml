@@ -7,41 +7,12 @@ on:
     branches: [main]
 
 jobs:
-  rust-tests:
-    name: Rust tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run Rust tests
-        run: cargo test --lib
-
-  python-tests:
-    name: Python tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: ["3.11"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
-      - name: Build and install
-        run: uv run maturin develop --release
-      - name: Run Python tests
-        run: uv run python -m pytest tests/python -v
-
-  lint:
-    name: Lint
+  # ── Fast checks (~2 min) ───────────────────────────────────────────
+  # Lint and test the core crate WITHOUT the "store" feature, which
+  # avoids compiling DuckDB from source (~10 min).  This covers 167
+  # of 170 Rust tests.
+  fast-checks:
+    name: Fast checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,5 +22,62 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Rustfmt
         run: cargo fmt --check
-      - name: Clippy
-        run: cargo clippy -- -D warnings
+      - name: Clippy (core, no DuckDB)
+        run: cargo clippy --no-default-features -- -D warnings
+      - name: Rust tests (core, no DuckDB)
+        run: cargo test --lib --no-default-features
+
+  # ── Store tests (~10 min) ──────────────────────────────────────────
+  # Full build including DuckDB.  Only runs when store-related files
+  # change (on PRs) or always on pushes to main.
+  store-tests:
+    name: Store tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            store:
+              - 'src/store.rs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.changes.outputs.store == 'true' || github.event_name == 'push'
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        if: steps.changes.outputs.store == 'true' || github.event_name == 'push'
+
+      - name: Clippy (all features incl. DuckDB)
+        if: steps.changes.outputs.store == 'true' || github.event_name == 'push'
+        run: cargo clippy --all-features -- -D warnings
+
+      - name: Rust tests (all features incl. DuckDB)
+        if: steps.changes.outputs.store == 'true' || github.event_name == 'push'
+        run: cargo test --lib
+
+  # ── Python tests (~14 min) ─────────────────────────────────────────
+  # Build the native extension (with DuckDB) and run pytest.
+  # Ubuntu only — the Python wrapper is platform-independent, and
+  # native correctness is covered by the Rust test suites above.
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+      - name: Build and install
+        run: uv run maturin develop --release
+      - name: Run Python tests
+        run: uv run python -m pytest tests/python -v
