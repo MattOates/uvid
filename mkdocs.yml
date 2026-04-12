@@ -86,6 +86,7 @@ nav:
       - Bit Layout: guide/bit-layout.md
       - VCF Passthrough: guide/vcf-passthrough.md
       - Normalization: guide/normalization.md
+      - HGVS Notation: guide/hgvs.md
   - Reference:
       - reference/index.md
       - Python API: reference/python-api.md

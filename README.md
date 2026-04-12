@@ -34,6 +34,7 @@ Genomic variant databases typically assign arbitrary integer or string IDs to va
 | **Shard-friendly** | ID-driven partitioning for distributed variant stores |
 | **UUIDv5 compatible** | Deterministic SHA-1 mapping for systems that expect standard UUIDs |
 | **Sequence-searchable** | Alleles up to 20 bp are stored exactly; longer alleles keep length + a 17-bit Rabin fingerprint |
+| **HGVS support** | Bidirectional conversion between HGVS genomic notation (`g.`/`m.`) and UVIDs |
 
 ### 128-bit layout (MSB to LSB)
 
@@ -93,6 +94,12 @@ uvid encode chr1 100 A G
 # Decode a UVID
 uvid decode 00000064-40000001-00000000-00000006
 
+# HGVS encode -- convert HGVS notation to UVID
+uvid hgvs-encode "NC_000001.11:g.12345A>G"
+
+# HGVS decode -- convert UVID back to HGVS notation
+uvid hgvs-decode 00003039-40000001-00000000-00000006
+
 # Annotate a VCF with UVIDs in the ID column
 uvid vcf input.vcf output.vcf -a GRCh38
 
@@ -109,12 +116,17 @@ uvid info collection.uvid
 ### Python
 
 ```python
-from uvid import UVID, Collection, vcf_passthrough
+from uvid import UVID, Collection, hgvs_to_uvid, uvid_to_hgvs, vcf_passthrough
 
 # Encode / decode
 uvid = UVID.encode("chr1", 100, "A", "G", "GRCh38")
 fields = uvid.decode()
 # {'chr': '1', 'pos': 100, 'ref': 'A', 'alt': 'G', 'assembly': 'GRCh38', ...}
+
+# HGVS conversion
+uvid = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+hgvs_str, warnings = uvid_to_hgvs(uvid.to_hex())
+# hgvs_str = "NC_000001.11:g.12345A>G"
 
 # UUIDv5 conversion
 print(uvid.uuid5())  # deterministic UUID
@@ -151,16 +163,16 @@ See the [normalization guide](https://mattoates.github.io/uvid/guide/normalizati
                           |
                        PyO3 FFI
                           |
-  +-----+--------+-------+--------+-----------+
-  |     |        |       |        |           |
-  | uvid128  assembly  vcf  normalize  store  |
-  | (encode/ (chr     (noodles (Tan et  (DuckDB|
-  |  decode)  offsets)  parser) al 2015) I/O)  |
-  +--------------------------------------------+
+  +-----+--------+-------+--------+-----------+------+
+  |     |        |       |        |           |      |
+  | uvid128  assembly  vcf  normalize  store  hgvs |
+  | (encode/ (chr     (noodles (Tan et  (DuckDB (HGVS|
+  |  decode)  offsets)  parser) al 2015) I/O)  g./m.)|
+  +------------------------------------------------+
                     Rust core
 ```
 
-- **Rust core**: UVID encoding/decoding, VCF parsing via [noodles](https://github.com/zaeleus/noodles), variant normalization, DuckDB bulk I/O
+- **Rust core**: UVID encoding/decoding, VCF parsing via [noodles](https://github.com/zaeleus/noodles), variant normalization, DuckDB bulk I/O, HGVS notation support
 - **Python bindings**: [PyO3](https://pyo3.rs) + [maturin](https://www.maturin.rs)
 - **CLI**: [Typer](https://typer.tiangolo.com) wrapping the native library
 

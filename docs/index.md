@@ -12,6 +12,7 @@ UVID encodes human genomic variants (SNPs, indels, MNVs) into deterministic 128-
 - **Collision-resistant** -- 17-bit Rabin fingerprint for longer alleles; zero collisions across 4.4 million ClinVar records
 - **UUIDv5 compatible** -- every UVID converts to a deterministic UUID for interoperability
 - **VCF passthrough** -- stamp UVIDs into VCF ID columns at >200k records/second
+- **HGVS support** -- bidirectional conversion between HGVS genomic notation (`g.`/`m.`) and UVIDs
 - **DuckDB collections** -- store, search, and query variants by region with no external database
 
 ## Quick Example
@@ -34,13 +35,16 @@ print(uvid.uuid5())
 ```bash
 # Annotate a VCF
 uvid vcf input.vcf output.vcf -a GRCh38
+
+# HGVS to UVID
+uvid hgvs-encode "NC_000001.11:g.12345A>G"
 ```
 
 ## Architecture
 
 | Layer | Technology | Role |
 |-------|-----------|------|
-| Core | Rust | UVID encoding/decoding, VCF parsing (noodles), DuckDB bulk I/O |
+| Core | Rust | UVID encoding/decoding, VCF parsing (noodles), HGVS notation, DuckDB bulk I/O |
 | Bindings | PyO3 + maturin | Zero-copy Python access to Rust core |
 | CLI | Typer | Command-line interface wrapping the Rust library |
 

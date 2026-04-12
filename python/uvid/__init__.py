@@ -11,6 +11,8 @@ from uvid._core import (
     Collection,
     ReferenceNotFoundError,
     data_dir,
+    hgvs_to_uvid,
+    uvid_to_hgvs,
     vcf_passthrough,
 )
 
@@ -21,6 +23,8 @@ __all__ = [
     "Collection",
     "ReferenceNotFoundError",
     "data_dir",
+    "hgvs_to_uvid",
+    "uvid_to_hgvs",
     "vcf_passthrough",
 ]
 __version__ = "0.1.0"
