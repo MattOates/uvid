@@ -100,6 +100,89 @@ ALT:        NNN...N (length: 30, length-only, fingerprint: 0x0f2c8)
 Assembly:   GRCh38
 ```
 
+## hgvs-encode
+
+Encode an HGVS expression as a UVID.
+
+```bash
+uvid hgvs-encode HGVS [--reference/-r PATH] [--assembly/-a ASSEMBLY]
+```
+
+Supports genomic (`g.`) and mitochondrial (`m.`) coordinate systems. Substitutions are reference-free; indels (insertions, deletions, delins, duplications, inversions) require a reference genome file.
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `HGVS` | HGVS expression (e.g. `NC_000001.11:g.12345A>G`) |
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--reference`, `-r` | none | Path to `.2bit` or `.fa` reference genome file. Required for indel-class variants |
+| `--assembly`, `-a` | auto-detect | Expected assembly for validation (`GRCh37`, `GRCh38`). Auto-detected from the RefSeq accession version |
+
+The assembly is determined from the RefSeq accession version number: `NC_000001.11` implies GRCh38, `NC_000001.10` implies GRCh37. If `--assembly` is provided, it is validated against the detected assembly and an error is raised on mismatch.
+
+**Examples:**
+
+```bash
+# Substitution (no reference needed)
+$ uvid hgvs-encode "NC_000001.11:g.12345A>G"
+UVID:    00003039-40000001-00000000-00000006
+Integer: 207685550972928006
+
+# Deletion (requires reference)
+$ uvid hgvs-encode "NC_000001.11:g.12345_12347del" -r hg38.2bit
+
+# Mitochondrial variant
+$ uvid hgvs-encode "NC_012920.1:m.8993T>G"
+
+# With assembly validation
+$ uvid hgvs-encode "NC_000001.11:g.12345A>G" -a GRCh38
+```
+
+## hgvs-decode
+
+Decode a UVID to HGVS genomic notation.
+
+```bash
+uvid hgvs-decode UVID_HEX [--detect-dup-inv] [--reference/-r PATH]
+```
+
+Produces `g.` or `m.` notation. By default outputs simple `ins`/`del`/`delins` notation; use `--detect-dup-inv` to recognise duplications and inversions.
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `UVID_HEX` | UVID hex string (with or without dashes) |
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--detect-dup-inv` | `false` | Detect duplications and inversions by comparing alleles. More expensive but produces richer HGVS notation |
+| `--reference`, `-r` | none | Path to `.2bit` or `.fa` reference genome file. Needed for duplication detection |
+
+Warnings are printed to stderr when:
+
+- An allele was stored in **length-mode** (>20 bp) and the exact sequence is unavailable -- the output uses N-repeats as an approximation.
+- An inversion allele exceeds 12 characters, meaning length-mode encoding may have been used and the sequence is approximate.
+
+**Examples:**
+
+```bash
+# Basic decode
+$ uvid hgvs-decode 00003039-40000001-00000000-00000006
+NC_000001.11:g.12345A>G
+
+# With duplication/inversion detection
+$ uvid hgvs-decode <uvid-hex> --detect-dup-inv -r hg38.2bit
+NC_000001.11:g.100_102inv
+```
+
 ## vcf
 
 Process a VCF file, replacing the ID column with UVID identifiers.

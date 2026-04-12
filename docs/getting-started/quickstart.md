@@ -108,6 +108,57 @@ lower, upper = UVID.range("chr1", 10000, 20000, "GRCh38")
 # All UVIDs in [lower, upper] fall within chr1:10000-20000
 ```
 
+## HGVS Notation
+
+UVID supports bidirectional conversion with [HGVS](https://varnomen.hgvs.org/) genomic (`g.`) and mitochondrial (`m.`) notation. The assembly is auto-detected from the RefSeq accession version.
+
+=== "CLI"
+
+    ```bash
+    # HGVS to UVID (substitution -- no reference needed)
+    $ uvid hgvs-encode "NC_000001.11:g.12345A>G"
+    UVID:    00003039-40000001-00000000-00000006
+    Integer: 207685550972928006
+
+    # UVID back to HGVS
+    $ uvid hgvs-decode 00003039-40000001-00000000-00000006
+    NC_000001.11:g.12345A>G
+
+    # Indels require a reference genome
+    $ uvid hgvs-encode "NC_000001.11:g.12345_12347del" -r hg38.2bit
+    ```
+
+=== "Python"
+
+    ```python
+    from uvid import hgvs_to_uvid, uvid_to_hgvs
+
+    # HGVS to UVID
+    uvid = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+    print(uvid.to_hex())  # 00003039-40000001-00000000-00000006
+
+    # UVID back to HGVS
+    hgvs_str, warnings = uvid_to_hgvs(uvid.to_hex())
+    print(hgvs_str)  # NC_000001.11:g.12345A>G
+
+    # Indels need a reference genome path
+    uvid = hgvs_to_uvid(
+        "NC_000001.11:g.12345_12347del",
+        reference="hg38.2bit",
+    )
+
+    # Detect inversions/duplications (opt-in)
+    hgvs_str, warnings = uvid_to_hgvs(
+        uvid.to_hex(),
+        detect_dup_inv=True,
+        reference="hg38.2bit",
+    )
+    for w in warnings:
+        print(f"Warning: {w}")
+    ```
+
+Supported edit types: substitution, deletion, insertion, delins, duplication, inversion, and identity (`=`). Only `g.` (genomic) and `m.` (mitochondrial) coordinate systems are supported; `c.`, `n.`, `p.`, and `r.` return a clear error pointing to the [ferro-hgvs](https://crates.io/crates/ferro-hgvs) crate.
+
 ## Next Steps
 
 - [Key Concepts](../guide/concepts.md) -- understand linearized positions and encoding modes
