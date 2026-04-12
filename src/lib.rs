@@ -5,6 +5,7 @@
 
 pub mod allele_pack;
 pub mod assembly;
+pub mod hgvs;
 pub mod normalize;
 #[cfg(feature = "store")]
 pub mod store;
@@ -291,6 +292,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Module-level functions
     m.add_function(wrap_pyfunction!(py_vcf_passthrough, m)?)?;
     m.add_function(wrap_pyfunction!(py_data_dir, m)?)?;
+    m.add_function(wrap_pyfunction!(py_hgvs_to_uvid, m)?)?;
+    m.add_function(wrap_pyfunction!(py_uvid_to_hgvs, m)?)?;
 
     Ok(())
 }
@@ -367,4 +370,115 @@ fn py_vcf_passthrough(
 #[pyo3(name = "data_dir")]
 fn py_data_dir() -> Option<String> {
     normalize::data_dir().map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Convert an HGVS genomic variant string to a UVID.
+///
+/// Args:
+///     hgvs: HGVS string (e.g. ``"NC_000001.11:g.12345A>G"``).
+///         Only genomic (``g.``) and mitochondrial (``m.``) coordinate
+///         systems are supported.
+///     reference: Optional path to a reference genome file (``.2bit`` or
+///         indexed ``.fa``).  Required for indels, duplications, and
+///         inversions (anything that needs an anchor base or deleted
+///         sequence from the reference).
+///     assembly: Optional expected assembly (``"GRCh37"`` or ``"GRCh38"``).
+///         If provided, the assembly inferred from the RefSeq accession
+///         version is validated against this value.
+///
+/// Returns:
+///     A ``UVID`` object.
+///
+/// Raises:
+///     ValueError: On parse errors, unknown accessions, assembly mismatches,
+///         or when a reference genome is required but not provided.
+#[pyfunction]
+#[pyo3(name = "hgvs_to_uvid", signature = (hgvs, reference = None, assembly = None))]
+fn py_hgvs_to_uvid(
+    hgvs: &str,
+    reference: Option<&str>,
+    assembly: Option<&str>,
+) -> PyResult<PyUvid> {
+    let expected_assembly = match assembly {
+        Some(s) => {
+            let asm: Assembly = s.parse().map_err(|e: String| PyValueError::new_err(e))?;
+            Some(asm)
+        }
+        None => None,
+    };
+
+    // Open reference genome if path provided
+    let mut ref_genome: Option<Box<dyn normalize::ReferenceGenome>> = match reference {
+        Some(path) => {
+            let ref_path = std::path::Path::new(path);
+            let rg = normalize::open_reference(ref_path).map_err(|e| {
+                PyValueError::new_err(format!("failed to open reference genome: {}", e))
+            })?;
+            Some(rg)
+        }
+        None => None,
+    };
+
+    let ref_mut: Option<&mut dyn normalize::ReferenceGenome> = match ref_genome {
+        Some(ref mut rg) => Some(rg.as_mut()),
+        None => None,
+    };
+
+    let uvid = hgvs::hgvs_to_uvid(hgvs, ref_mut, expected_assembly)
+        .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
+
+    Ok(PyUvid { inner: uvid })
+}
+
+/// Convert a UVID back to HGVS genomic notation.
+///
+/// Args:
+///     uvid: Hex string of the UVID to convert.
+///     detect_dup_inv: If ``True``, attempt to detect duplications and
+///         inversions by comparing the variant against the reference
+///         genome.  More expensive but produces richer notation.
+///         Defaults to ``False``.
+///     reference: Optional path to a reference genome file.  Required
+///         when ``detect_dup_inv=True`` for duplication detection.
+///
+/// Returns:
+///     A tuple of ``(hgvs_string, warnings)`` where *warnings* is a
+///     list of strings describing any approximations (e.g. length-mode
+///     alleles whose exact sequence is unavailable).
+///
+/// Raises:
+///     ValueError: If the UVID cannot be decoded or the reference
+///         genome cannot be opened.
+#[pyfunction]
+#[pyo3(name = "uvid_to_hgvs", signature = (uvid, detect_dup_inv = false, reference = None))]
+fn py_uvid_to_hgvs(
+    uvid: &str,
+    detect_dup_inv: bool,
+    reference: Option<&str>,
+) -> PyResult<(String, Vec<String>)> {
+    let uvid128 = Uvid128::from_hex_string(uvid)
+        .ok_or_else(|| PyValueError::new_err("invalid UVID hex string"))?;
+
+    let mut ref_genome: Option<Box<dyn normalize::ReferenceGenome>> = match reference {
+        Some(path) => {
+            let ref_path = std::path::Path::new(path);
+            let rg = normalize::open_reference(ref_path).map_err(|e| {
+                PyValueError::new_err(format!("failed to open reference genome: {}", e))
+            })?;
+            Some(rg)
+        }
+        None => None,
+    };
+
+    let options = hgvs::FormatOptions { detect_dup_inv };
+
+    let ref_mut: Option<&mut dyn normalize::ReferenceGenome> = match ref_genome {
+        Some(ref mut rg) => Some(rg.as_mut()),
+        None => None,
+    };
+
+    let (hgvs_str, warnings) = hgvs::uvid_to_hgvs(&uvid128, ref_mut, &options)
+        .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
+
+    Ok((hgvs_str, warnings))
 }

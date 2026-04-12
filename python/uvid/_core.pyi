@@ -86,6 +86,68 @@ def vcf_passthrough(
     """
     ...
 
+def hgvs_to_uvid(
+    hgvs: str,
+    reference: str | None = None,
+    assembly: str | None = None,
+) -> UVID:
+    """Convert HGVS genomic notation to a UVID.
+
+    Parses an HGVS ``g.`` or ``m.`` expression and encodes it as a
+    UVID.  The genome assembly is auto-detected from the RefSeq
+    accession version (e.g. ``NC_000001.11`` implies GRCh38).
+
+    A reference genome is required for deletions, insertions, delins,
+    duplications, and inversions — only pure substitutions are
+    reference-free.
+
+    Args:
+        hgvs: HGVS string, e.g. ``"NC_000001.11:g.12345A>G"``.
+        reference: Optional path to a ``.2bit`` or ``.fa`` reference
+            genome file.  Required for indel-class variants.
+        assembly: Optional assembly override for validation (e.g.
+            ``"GRCh38"``).  If provided and the accession implies a
+            different assembly, a ``ValueError`` is raised.
+
+    Returns:
+        A ``UVID`` object.
+
+    Raises:
+        ValueError: On parse errors, unknown accessions, assembly
+            mismatches, or when a reference genome is required but
+            not provided.
+    """
+    ...
+
+def uvid_to_hgvs(
+    uvid: str,
+    detect_dup_inv: bool = False,
+    reference: str | None = None,
+) -> tuple[str, list[str]]:
+    """Convert a UVID back to HGVS genomic notation.
+
+    Decodes the UVID's fields and formats them as an HGVS ``g.`` or
+    ``m.`` expression.
+
+    Args:
+        uvid: Hex string of the UVID (with or without dashes).
+        detect_dup_inv: If ``True``, attempt to detect duplications
+            and inversions by comparing alleles.  More expensive but
+            produces richer notation.  Defaults to ``False``.
+        reference: Optional path to a reference genome file.  Required
+            when ``detect_dup_inv=True`` for duplication detection.
+
+    Returns:
+        A tuple of ``(hgvs_string, warnings)`` where *warnings* is a
+        list of strings describing any approximations (e.g.
+        length-mode alleles whose exact sequence is unavailable).
+
+    Raises:
+        ValueError: If the UVID cannot be decoded or the reference
+            genome cannot be opened.
+    """
+    ...
+
 class UVID:
     """A 128-bit Universal Variant ID encoding a human genomic variant."""
 

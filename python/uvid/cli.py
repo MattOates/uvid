@@ -10,6 +10,8 @@ from uvid import (
     Collection,
     ReferenceNotFoundError,
     data_dir,
+    hgvs_to_uvid,
+    uvid_to_hgvs,
     vcf_passthrough,
 )
 
@@ -363,6 +365,71 @@ def decode(
     typer.echo(f"REF:        {fields['ref'] or '.'} ({ref_detail})")
     typer.echo(f"ALT:        {fields['alt'] or '.'} ({alt_detail})")
     typer.echo(f"Assembly:   {fields['assembly']}")
+
+
+@app.command(name="hgvs-encode")
+def hgvs_encode(
+    hgvs: str = typer.Argument(..., help="HGVS expression, e.g. NC_000001.11:g.12345A>G"),
+    reference: Path | None = typer.Option(
+        None, "--reference", "-r", help="Path to .2bit or .fa reference genome file."
+    ),
+    assembly: str | None = typer.Option(
+        None,
+        "--assembly",
+        "-a",
+        help="Expected assembly for validation (GRCh37, GRCh38). Auto-detected from accession.",
+    ),
+) -> None:
+    """Encode an HGVS expression as a UVID.
+
+    Supports genomic (g.) and mitochondrial (m.) coordinate systems.
+    Substitutions are reference-free; indels require a reference genome.
+    """
+    ref_path = str(reference) if reference else None
+
+    try:
+        uvid = hgvs_to_uvid(hgvs, reference=ref_path, assembly=assembly)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+    typer.echo(f"UVID:    {uvid.to_hex()}")
+    typer.echo(f"Integer: {uvid.as_int()}")
+
+
+@app.command(name="hgvs-decode")
+def hgvs_decode(
+    uvid_hex: str = typer.Argument(..., help="UVID hex string (with or without dashes)"),
+    detect_dup_inv: bool = typer.Option(
+        False,
+        "--detect-dup-inv",
+        help="Detect duplications/inversions (requires comparing alleles).",
+    ),
+    reference: Path | None = typer.Option(
+        None,
+        "--reference",
+        "-r",
+        help="Path to .2bit or .fa reference genome file (needed for dup detection).",
+    ),
+) -> None:
+    """Decode a UVID to HGVS genomic notation.
+
+    Produces g. or m. notation. By default outputs simple ins/del/delins;
+    use --detect-dup-inv to recognise duplications and inversions.
+    """
+    ref_path = str(reference) if reference else None
+
+    try:
+        hgvs_str, warnings = uvid_to_hgvs(
+            uvid_hex, detect_dup_inv=detect_dup_inv, reference=ref_path
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+    typer.echo(hgvs_str)
+    for w in warnings:
+        typer.echo(f"Warning: {w}", err=True)
 
 
 if __name__ == "__main__":
