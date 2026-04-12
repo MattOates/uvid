@@ -357,8 +357,8 @@ fn parse_location_and_edit(
     let (start, rest) = parse_u64(body)?;
 
     // Check for range (underscore separator)
-    let (end, rest) = if rest.starts_with('_') {
-        let (end_pos, r) = parse_u64(&rest[1..])?;
+    let (end, rest) = if let Some(after_underscore) = rest.strip_prefix('_') {
+        let (end_pos, r) = parse_u64(after_underscore)?;
         (end_pos, r)
     } else {
         (start, rest)
@@ -754,21 +754,12 @@ fn reverse_complement(seq: &[u8]) -> Vec<u8> {
 
 // ── UVID → HGVS conversion ────────────────────────────────────────────────
 
-/// Options for UVID → HGVS conversion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FormatOptions {
     /// If true, attempt to detect duplications and inversions by comparing
     /// the variant against the reference genome. This is more expensive
     /// but produces more informative HGVS notation.
     pub detect_dup_inv: bool,
-}
-
-impl Default for FormatOptions {
-    fn default() -> Self {
-        FormatOptions {
-            detect_dup_inv: false,
-        }
-    }
 }
 
 /// Convert a UVID back to HGVS genomic notation.
@@ -986,19 +977,6 @@ fn vcf_to_hgvs_edit(
     }
 
     // Complex: different lengths, not a clean insertion or deletion.
-    // Check for inversion if requested
-    if options.detect_dup_inv && ref_len == alt_len && ref_len > 1 {
-        if *alt_seq == reverse_complement(ref_seq) {
-            return Ok(HgvsVariant {
-                accession: accession.to_string(),
-                coordinate_system: coord_sys,
-                start: pos as u64,
-                end: (pos as u64) + (ref_len as u64) - 1,
-                edit: NaEdit::Inversion,
-            });
-        }
-    }
-
     // Fallback: delins
     Ok(HgvsVariant {
         accession: accession.to_string(),
