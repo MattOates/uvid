@@ -6,6 +6,7 @@
 pub mod allele_pack;
 pub mod assembly;
 pub mod normalize;
+#[cfg(feature = "store")]
 pub mod store;
 pub mod uvid128;
 pub mod vcf;
@@ -170,11 +171,13 @@ impl PyUvid {
 }
 
 /// Python-exposed Collection class.
+#[cfg(feature = "store")]
 #[pyclass(name = "Collection", unsendable)]
 struct PyCollection {
     inner: store::UvidStore,
 }
 
+#[cfg(feature = "store")]
 #[pymethods]
 impl PyCollection {
     /// Open or create a .uvid collection file.
@@ -266,6 +269,7 @@ impl PyCollection {
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUvid>()?;
+    #[cfg(feature = "store")]
     m.add_class::<PyCollection>()?;
 
     // Custom exceptions
