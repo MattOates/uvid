@@ -13,6 +13,8 @@ from uvid import (
     UVID,
     AssemblyNotDetectedError,
     Collection,
+    hgvs_to_uvid,
+    uvid_to_hgvs,
     vcf_passthrough,
 )
 from uvid.cli import app
@@ -883,3 +885,345 @@ class TestCLIVcf:
         assert result.exit_code == 0
         data = out.read_bytes()
         assert data[0:2] == b"\x1f\x8b"
+
+
+# ──────────────────────────────────────────────────────
+# HGVS tests
+# ──────────────────────────────────────────────────────
+
+
+class TestHgvsToUvid:
+    """Test the hgvs_to_uvid() Python function."""
+
+    def test_substitution_basic(self):
+        """A simple SNV on chr1 (GRCh38) should encode without a reference."""
+        uvid = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+        assert uvid is not None
+        fields = uvid.decode()
+        assert fields["chr"] == "1"
+        assert fields["pos"] == 12345
+        assert fields["ref"] == "A"
+        assert fields["alt"] == "G"
+        assert fields["assembly"] == "GRCh38"
+
+    def test_substitution_deterministic(self):
+        """Same HGVS input produces the same UVID every time."""
+        a = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+        b = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+        assert a == b
+
+    def test_substitution_grch37(self):
+        """GRCh37 accession version (.10) auto-detects correctly."""
+        uvid = hgvs_to_uvid("NC_000001.10:g.12345A>G")
+        fields = uvid.decode()
+        assert fields["assembly"] == "GRCh37"
+
+    def test_substitution_grch38_vs_grch37_differ(self):
+        """Same locus on different assemblies produces different UVIDs."""
+        uvid38 = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+        uvid37 = hgvs_to_uvid("NC_000001.10:g.12345A>G")
+        assert uvid38 != uvid37
+
+    def test_mitochondrial(self):
+        """Mitochondrial accession (m. coordinate system) works."""
+        uvid = hgvs_to_uvid("NC_012920.1:m.8993T>G")
+        fields = uvid.decode()
+        assert fields["chr"] == "M"
+        assert fields["pos"] == 8993
+        assert fields["ref"] == "T"
+        assert fields["alt"] == "G"
+
+    def test_chrx_accession(self):
+        """chrX accession encodes correctly."""
+        uvid = hgvs_to_uvid("NC_000023.11:g.100C>T")
+        fields = uvid.decode()
+        assert fields["chr"] == "X"
+        assert fields["pos"] == 100
+
+    def test_chry_accession(self):
+        """chrY accession encodes correctly."""
+        uvid = hgvs_to_uvid("NC_000024.10:g.500A>G")
+        fields = uvid.decode()
+        assert fields["chr"] == "Y"
+
+    def test_assembly_validation_match(self):
+        """Providing matching expected assembly succeeds."""
+        uvid = hgvs_to_uvid("NC_000001.11:g.12345A>G", assembly="GRCh38")
+        assert uvid is not None
+
+    def test_assembly_validation_mismatch(self):
+        """Providing mismatched assembly raises ValueError."""
+        with pytest.raises(ValueError, match="assembly mismatch"):
+            hgvs_to_uvid("NC_000001.11:g.12345A>G", assembly="GRCh37")
+
+    def test_unsupported_coordinate_system_c(self):
+        """c. coordinate system raises a clear error pointing to ferro-hgvs."""
+        with pytest.raises(ValueError, match="not supported"):
+            hgvs_to_uvid("NC_000001.11:c.100A>G")
+
+    def test_unsupported_coordinate_system_p(self):
+        """p. coordinate system raises a clear error."""
+        with pytest.raises(ValueError, match="not supported"):
+            hgvs_to_uvid("NC_000001.11:p.Ala100Gly")
+
+    def test_unsupported_coordinate_system_r(self):
+        """r. coordinate system raises a clear error."""
+        with pytest.raises(ValueError, match="not supported"):
+            hgvs_to_uvid("NC_000001.11:r.100a>g")
+
+    def test_non_refseq_accession(self):
+        """Non-NC_ accessions raise a parse error."""
+        with pytest.raises(ValueError, match="NC_"):
+            hgvs_to_uvid("NM_000001.3:g.100A>G")
+
+    def test_unknown_accession(self):
+        """An unrecognized NC_ accession raises ValueError."""
+        with pytest.raises(ValueError, match="unknown"):
+            hgvs_to_uvid("NC_999999.1:g.100A>G")
+
+    def test_parse_error_missing_colon(self):
+        """Missing colon between accession and coordinate system."""
+        with pytest.raises(ValueError, match="parse error"):
+            hgvs_to_uvid("NC_000001.11g.12345A>G")
+
+    def test_parse_error_no_edit(self):
+        """Missing edit type after position."""
+        with pytest.raises(ValueError):
+            hgvs_to_uvid("NC_000001.11:g.12345")
+
+    def test_deletion_without_reference_fails(self):
+        """Deletions require a reference genome."""
+        with pytest.raises(ValueError, match="reference genome required"):
+            hgvs_to_uvid("NC_000001.11:g.12345_12347del")
+
+    def test_insertion_without_reference_fails(self):
+        """Insertions require a reference genome."""
+        with pytest.raises(ValueError, match="reference genome required"):
+            hgvs_to_uvid("NC_000001.11:g.12345_12346insACGT")
+
+    def test_matches_direct_encode(self):
+        """HGVS-derived UVID matches direct UVID.encode() for the same variant."""
+        hgvs_uvid = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+        direct_uvid = UVID.encode("chr1", 12345, "A", "G", "GRCh38")
+        assert hgvs_uvid == direct_uvid
+
+    def test_lowercase_bases(self):
+        """Lowercase bases in substitution are accepted."""
+        uvid = hgvs_to_uvid("NC_000001.11:g.100a>t")
+        fields = uvid.decode()
+        assert fields["ref"] == "A"
+        assert fields["alt"] == "T"
+
+
+class TestUvidToHgvs:
+    """Test the uvid_to_hgvs() Python function."""
+
+    def test_substitution_roundtrip(self):
+        """Encode a substitution via HGVS, decode back — should match."""
+        uvid = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+        hgvs_str, warnings = uvid_to_hgvs(str(uvid))
+        assert hgvs_str == "NC_000001.11:g.12345A>G"
+        assert warnings == []
+
+    def test_substitution_grch37_roundtrip(self):
+        """GRCh37 substitution round-trips with correct accession version."""
+        uvid = hgvs_to_uvid("NC_000001.10:g.12345A>G")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid))
+        assert hgvs_str == "NC_000001.10:g.12345A>G"
+
+    def test_mitochondrial_roundtrip(self):
+        """Mitochondrial variant uses m. coordinate system."""
+        uvid = hgvs_to_uvid("NC_012920.1:m.8993T>G")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid))
+        assert hgvs_str == "NC_012920.1:m.8993T>G"
+
+    def test_chrx_roundtrip(self):
+        """chrX variant round-trips correctly."""
+        uvid = hgvs_to_uvid("NC_000023.11:g.100C>T")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid))
+        assert hgvs_str == "NC_000023.11:g.100C>T"
+
+    def test_deletion_from_direct_encode(self):
+        """A VCF-style deletion (with anchor base) formats as HGVS deletion."""
+        # VCF: pos=100, ref=TACG, alt=T → HGVS deletion of positions 101-103
+        uvid = UVID.encode("chr1", 100, "TACG", "T")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid))
+        assert "del" in hgvs_str
+        assert "101_103" in hgvs_str
+
+    def test_insertion_from_direct_encode(self):
+        """A VCF-style insertion formats as HGVS insertion."""
+        # VCF: pos=100, ref=A, alt=AGGG → HGVS insertion between 100 and 101
+        uvid = UVID.encode("chr1", 100, "A", "AGGG")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid))
+        assert "ins" in hgvs_str
+        assert "GGG" in hgvs_str
+
+    def test_delins_from_direct_encode(self):
+        """A VCF-style complex variant formats as HGVS delins."""
+        # VCF: pos=100, ref=ACG, alt=TT
+        uvid = UVID.encode("chr1", 100, "ACG", "TT")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid))
+        assert "del" in hgvs_str
+        assert "ins" in hgvs_str
+
+    def test_identity_from_direct_encode(self):
+        """A ref==alt variant formats as HGVS identity (=)."""
+        uvid = UVID.encode("chr1", 100, "A", "A")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid))
+        assert hgvs_str.endswith("=")
+
+    def test_length_mode_produces_warnings(self):
+        """Long alleles (>20bp) in length-mode produce warnings."""
+        # 21 bases triggers length-mode encoding
+        uvid = UVID.encode("chr1", 100, "A" * 21, "C" * 21)
+        _, warnings = uvid_to_hgvs(str(uvid))
+        assert len(warnings) >= 1
+        assert any("length-mode" in w for w in warnings)
+
+    def test_inversion_detection_off_by_default(self):
+        """Without detect_dup_inv, inversions show as delins."""
+        # ref=ACG, alt=CGT (reverse complement of ACG)
+        uvid = UVID.encode("chr1", 100, "ACG", "CGT")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid), detect_dup_inv=False)
+        assert "inv" not in hgvs_str
+        assert "del" in hgvs_str and "ins" in hgvs_str
+
+    def test_inversion_detection_opt_in(self):
+        """With detect_dup_inv=True, inversions are recognized."""
+        uvid = UVID.encode("chr1", 100, "ACG", "CGT")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid), detect_dup_inv=True)
+        assert "inv" in hgvs_str
+
+    def test_invalid_uvid_hex(self):
+        """An invalid hex string raises ValueError."""
+        with pytest.raises(ValueError):
+            uvid_to_hgvs("not-a-valid-uvid-at-all-really")
+
+    def test_returns_tuple(self):
+        """Return type is (str, list[str])."""
+        uvid = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+        result = uvid_to_hgvs(str(uvid))
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], str)
+        assert isinstance(result[1], list)
+
+    def test_accession_in_output(self):
+        """Output HGVS string starts with the correct RefSeq accession."""
+        uvid = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+        hgvs_str, _ = uvid_to_hgvs(str(uvid))
+        assert hgvs_str.startswith("NC_000001.11:")
+
+
+class TestCLIHgvsEncode:
+    """Test the 'uvid hgvs-encode' CLI command."""
+
+    def test_encode_substitution(self):
+        """Basic substitution encoding via CLI."""
+        result = runner.invoke(app, ["hgvs-encode", "NC_000001.11:g.12345A>G"])
+        assert result.exit_code == 0
+        assert "UVID:" in result.output
+        assert "Integer:" in result.output
+
+    def test_encode_mitochondrial(self):
+        """Mitochondrial variant via CLI."""
+        result = runner.invoke(app, ["hgvs-encode", "NC_012920.1:m.8993T>G"])
+        assert result.exit_code == 0
+        assert "UVID:" in result.output
+
+    def test_encode_with_assembly_validation(self):
+        """Assembly validation flag works on CLI."""
+        result = runner.invoke(
+            app, ["hgvs-encode", "NC_000001.11:g.12345A>G", "--assembly", "GRCh38"]
+        )
+        assert result.exit_code == 0
+
+    def test_encode_assembly_mismatch_error(self):
+        """Assembly mismatch produces an error exit."""
+        result = runner.invoke(
+            app, ["hgvs-encode", "NC_000001.11:g.12345A>G", "--assembly", "GRCh37"]
+        )
+        assert result.exit_code != 0
+        assert "Error:" in result.output or "Error:" in (result.stderr or "")
+
+    def test_encode_unsupported_coordinate_system(self):
+        """Unsupported coordinate system produces an error exit."""
+        result = runner.invoke(app, ["hgvs-encode", "NC_000001.11:c.100A>G"])
+        assert result.exit_code != 0
+
+    def test_encode_parse_error(self):
+        """Malformed HGVS produces an error exit."""
+        result = runner.invoke(app, ["hgvs-encode", "not-an-hgvs-string"])
+        assert result.exit_code != 0
+
+    def test_encode_deletion_without_reference(self):
+        """Deletion without --reference flag produces an error exit."""
+        result = runner.invoke(app, ["hgvs-encode", "NC_000001.11:g.12345_12347del"])
+        assert result.exit_code != 0
+
+    def test_encode_matches_direct_api(self):
+        """CLI output UVID matches hgvs_to_uvid() Python function."""
+        hgvs_expr = "NC_000001.11:g.12345A>G"
+        uvid = hgvs_to_uvid(hgvs_expr)
+        result = runner.invoke(app, ["hgvs-encode", hgvs_expr])
+        assert result.exit_code == 0
+        assert uvid.to_hex() in result.output
+
+
+class TestCLIHgvsDecode:
+    """Test the 'uvid hgvs-decode' CLI command."""
+
+    def test_decode_substitution(self):
+        """Decode a substitution UVID back to HGVS via CLI."""
+        uvid = hgvs_to_uvid("NC_000001.11:g.12345A>G")
+        result = runner.invoke(app, ["hgvs-decode", str(uvid)])
+        assert result.exit_code == 0
+        assert "NC_000001.11:g.12345A>G" in result.output
+
+    def test_decode_mitochondrial(self):
+        """Mitochondrial UVID decodes with m. coordinate system."""
+        uvid = hgvs_to_uvid("NC_012920.1:m.8993T>G")
+        result = runner.invoke(app, ["hgvs-decode", str(uvid)])
+        assert result.exit_code == 0
+        assert "m." in result.output
+
+    def test_decode_invalid_uvid(self):
+        """Invalid UVID hex string produces an error exit."""
+        result = runner.invoke(app, ["hgvs-decode", "zzzz-invalid"])
+        assert result.exit_code != 0
+
+    def test_decode_with_detect_dup_inv(self):
+        """--detect-dup-inv flag is accepted on CLI."""
+        # Inversion: ref=ACG, alt=CGT
+        uvid = UVID.encode("chr1", 100, "ACG", "CGT")
+        result = runner.invoke(app, ["hgvs-decode", str(uvid), "--detect-dup-inv"])
+        assert result.exit_code == 0
+        assert "inv" in result.output
+
+    def test_decode_without_detect_dup_inv(self):
+        """Without --detect-dup-inv, inversions show as delins."""
+        uvid = UVID.encode("chr1", 100, "ACG", "CGT")
+        result = runner.invoke(app, ["hgvs-decode", str(uvid)])
+        assert result.exit_code == 0
+        assert "inv" not in result.output
+        assert "del" in result.output
+
+    def test_decode_roundtrip_via_cli(self):
+        """Encode via CLI, then decode via CLI — HGVS should round-trip."""
+        hgvs_expr = "NC_000001.11:g.12345A>G"
+        # Encode
+        encode_result = runner.invoke(app, ["hgvs-encode", hgvs_expr])
+        assert encode_result.exit_code == 0
+        # Extract UVID hex from "UVID:    <hex>" line
+        uvid_hex = None
+        for line in encode_result.output.splitlines():
+            if line.startswith("UVID:"):
+                uvid_hex = line.split(":")[1].strip()
+                break
+        assert uvid_hex is not None
+
+        # Decode
+        decode_result = runner.invoke(app, ["hgvs-decode", uvid_hex])
+        assert decode_result.exit_code == 0
+        assert hgvs_expr in decode_result.output
