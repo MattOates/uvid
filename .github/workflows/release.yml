@@ -37,7 +37,7 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist
           manylinux: auto
-          python-version: "3.11"
+          before-script-linux: "export PATH=/opt/python/cp311-cp311/bin:$PATH"
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
