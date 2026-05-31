@@ -95,7 +95,7 @@ impl UvidStore {
         // Create sites table
         self.conn.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS \"{}\" (
-                uvid UHUGEINT PRIMARY KEY,
+                uvid HUGEINT PRIMARY KEY,
                 qual FLOAT,
                 filter VARCHAR,
                 info JSON,
@@ -111,7 +111,7 @@ impl UvidStore {
             let staging = format!("{}_staging", sites_table);
             self.conn.execute_batch(&format!(
                 "CREATE TEMPORARY TABLE \"{}\" (
-                    uvid UHUGEINT,
+                    uvid HUGEINT,
                     qual FLOAT,
                     filter VARCHAR,
                     info JSON,
@@ -122,10 +122,11 @@ impl UvidStore {
 
             let mut appender = self.conn.appender(&staging)?;
             for site in &parsed.sites {
-                let uvid_u128 = site.uvid.as_u128();
+                // Store as HUGEINT (i128) via bit-reinterpretation; roundtrips exactly.
+                let uvid_i128 = site.uvid.as_u128() as i128;
                 let info_str = site.info.to_string();
                 appender.append_row(params![
-                    uvid_u128,
+                    uvid_i128,
                     site.qual,
                     site.filter,
                     info_str,
@@ -162,7 +163,7 @@ impl UvidStore {
 
             self.conn.execute_batch(&format!(
                 "CREATE TABLE IF NOT EXISTS \"{}\" (
-                    uvid UHUGEINT PRIMARY KEY,
+                    uvid HUGEINT PRIMARY KEY,
                     allele1 UTINYINT,
                     allele2 UTINYINT,
                     phased BOOLEAN,
@@ -178,7 +179,7 @@ impl UvidStore {
                 let staging = format!("{}_staging", sample_table);
                 self.conn.execute_batch(&format!(
                     "CREATE TEMPORARY TABLE \"{}\" (
-                        uvid UHUGEINT,
+                        uvid HUGEINT,
                         allele1 UTINYINT,
                         allele2 UTINYINT,
                         phased BOOLEAN,
@@ -191,14 +192,15 @@ impl UvidStore {
 
                 let mut appender = self.conn.appender(&staging)?;
                 for record in &parsed.samples[sample_idx] {
-                    let uvid_u128 = record.uvid.as_u128();
+                    // Store as HUGEINT (i128) via bit-reinterpretation; roundtrips exactly.
+                    let uvid_i128 = record.uvid.as_u128() as i128;
                     let format_extra_str = if record.format_extra.is_null() {
                         None
                     } else {
                         Some(record.format_extra.to_string())
                     };
                     appender.append_row(params![
-                        uvid_u128,
+                        uvid_i128,
                         record.allele1,
                         record.allele2,
                         record.phased,
@@ -287,8 +289,10 @@ impl UvidStore {
         let (lower, upper) = Uvid128::range(chr, start_pos, end_pos, assembly)
             .ok_or("Invalid chromosome or position for range query")?;
 
-        let lower_u128 = lower.as_u128();
-        let upper_u128 = upper.as_u128();
+        // Bounds share the same chromosome bits so they have the same sign
+        // as i128; BETWEEN therefore works correctly on a HUGEINT column.
+        let lower_i128 = lower.as_u128() as i128;
+        let upper_i128 = upper.as_u128() as i128;
 
         let is_sites_table = table_name.ends_with("__sites");
 
@@ -303,8 +307,8 @@ impl UvidStore {
             );
 
             let mut stmt = self.conn.prepare(&query)?;
-            let rows = stmt.query_map(params![lower_u128, upper_u128], |row| {
-                let uvid_u128: u128 = row.get(0)?;
+            let rows = stmt.query_map(params![lower_i128, upper_i128], |row| {
+                let uvid_u128 = row.get::<_, i128>(0)? as u128;
                 Ok(SearchResult {
                     uvid: Uvid128::from_u128(uvid_u128),
                     allele1: None,
@@ -346,8 +350,8 @@ impl UvidStore {
             );
 
             let mut stmt = self.conn.prepare(&query)?;
-            let rows = stmt.query_map(params![lower_u128, upper_u128], |row| {
-                let uvid_u128: u128 = row.get(0)?;
+            let rows = stmt.query_map(params![lower_i128, upper_i128], |row| {
+                let uvid_u128 = row.get::<_, i128>(0)? as u128;
                 Ok(SearchResult {
                     uvid: Uvid128::from_u128(uvid_u128),
                     allele1: row.get(1)?,
