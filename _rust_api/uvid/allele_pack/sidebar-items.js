@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ALLELE_BITS","ALLELE_MASK","FINGERPRINT_BITS","LENGTH_BITS","MAX_LENGTH_MODE_LEN","MAX_STRING_BASES","MODE_BIT_POS","PAYLOAD_MASK"],"enum":["AlleleDecoded"],"fn":["decode_allele","decode_base","decode_sequence","encode_allele","encode_base","encode_sequence","is_string_mode","is_valid_dna","rabin_fingerprint_dna"]};

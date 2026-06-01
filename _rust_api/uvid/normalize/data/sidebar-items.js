@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["data_dir","find_reference","find_reference_in","open_reference_for_assembly","open_reference_for_assembly_in"]};

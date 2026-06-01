@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["VcfPassthroughError"],"fn":["detect_assembly_from_header","vcf_passthrough"]};

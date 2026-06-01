@@ -1,0 +1,23 @@
+/* Dark mode tweaks for Mermaid packet diagrams */
+[data-md-color-scheme="slate"] .mermaid {
+  --mermaid-font-family: var(--md-code-font-family);
+}
+
+/* Ensure packet diagram labels are legible in dark mode */
+[data-md-color-scheme="slate"] .mermaid rect {
+  stroke: var(--md-default-fg-color--light) !important;
+}
+
+[data-md-color-scheme="slate"] .mermaid text {
+  fill: var(--md-default-fg-color) !important;
+}
+
+/* Rust API iframe styling */
+[data-md-color-scheme="slate"] iframe {
+  filter: invert(0.88) hue-rotate(180deg);
+}
+
+/* Tighten up packet diagram spacing */
+.mermaid svg {
+  max-width: 100%;
+}
