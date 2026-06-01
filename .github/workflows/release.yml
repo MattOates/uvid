@@ -75,8 +75,6 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: astral-sh/setup-uv@v6
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@v1
-        with:
-          command: upload
-          args: --non-interactive dist/*
+        run: uv publish --trusted-publishing always dist/*
