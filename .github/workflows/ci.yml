@@ -8,9 +8,7 @@ on:
 
 jobs:
   # ── Fast checks (~2 min) ───────────────────────────────────────────
-  # Lint and test the core crate WITHOUT the "store" feature, which
-  # avoids compiling DuckDB from source (~10 min).  This covers 167
-  # of 170 Rust tests.
+  # Lint and test the core crate WITHOUT the "store" feature (no DuckDB).
   fast-checks:
     name: Fast checks
     runs-on: ubuntu-latest
@@ -27,8 +25,8 @@ jobs:
       - name: Rust tests (core, no DuckDB)
         run: cargo test --lib --no-default-features
 
-  # ── Store tests (~10 min) ──────────────────────────────────────────
-  # Full build including DuckDB.  Only runs when store-related files
+  # ── Store tests ────────────────────────────────────────────────────
+  # Full build linking the prebuilt libduckdb.  Only runs when store-related files
   # change (on PRs) or always on pushes to main.
   store-tests:
     name: Store tests
@@ -60,7 +58,7 @@ jobs:
         if: steps.changes.outputs.store == 'true' || github.event_name == 'push'
         run: cargo test --lib
 
-  # ── Python tests (~14 min) ─────────────────────────────────────────
+  # ── Python tests ───────────────────────────────────────────────────
   # Build the native extension (with DuckDB) and run pytest.
   # Ubuntu only — the Python wrapper is platform-independent, and
   # native correctness is covered by the Rust test suites above.
@@ -80,4 +78,8 @@ jobs:
       - name: Build and install
         run: uv run maturin develop --release
       - name: Run Python tests
-        run: uv run python -m pytest tests/python -v
+        # The extension links the prebuilt libduckdb dynamically; release
+        # wheels bundle it, a dev build has to be pointed at it.
+        run: |
+          export LD_LIBRARY_PATH=$(ls -d "$PWD"/target/duckdb-download/*/* | tail -1)
+          uv run python -m pytest tests/python -v

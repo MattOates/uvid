@@ -21,8 +21,6 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
           - os: macos-latest
-            target: x86_64-apple-darwin
-          - os: macos-latest
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -33,11 +31,35 @@ jobs:
           python-version: "3.11"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          # The prebuilt libduckdb targets macOS 11.0; the wheel tag must match
+          # or delocate rejects it.
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist
+          # auditwheel is skipped here and run below, once libduckdb exists.
+          args: --release --out unrepaired --auditwheel skip
           manylinux: "2_28"
           before-script-linux: "export PATH=/opt/python/cp311-cp311/bin:$PATH"
+      - uses: astral-sh/setup-uv@v6
+      # DuckDB is not compiled: the build downloads the prebuilt libduckdb
+      # (target/duckdb-download/<target>/<version>/) and this copies it into
+      # the wheel so users need nothing installed.
+      - name: Bundle prebuilt libduckdb into the wheel
+        shell: bash
+        run: |
+          lib=$(ls -d target/duckdb-download/*/* | tail -1)
+          case "$RUNNER_OS" in
+            Linux)
+              LD_LIBRARY_PATH="$PWD/$lib" uvx --with patchelf auditwheel repair -w dist unrepaired/*.whl ;;
+            macOS)
+              # The prebuilt library is universal; keep only arm64.
+              lipo -thin arm64 "$lib/libduckdb.dylib" -output "$lib/libduckdb.dylib"
+              # python -m: the delocate-wheel entry point loses DYLD_LIBRARY_PATH under uvx.
+              DYLD_LIBRARY_PATH="$PWD/$lib" uvx --from delocate python -m delocate.cmd.delocate_wheel -w dist unrepaired/*.whl ;;
+            Windows)
+              uvx delvewheel repair --add-path "$lib" -w dist unrepaired/*.whl ;;
+          esac
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:

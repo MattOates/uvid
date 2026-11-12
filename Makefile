@@ -18,8 +18,11 @@ test: test-rust test-python ## Run all tests
 test-rust: ## Run Rust tests
 	cargo test --lib
 
+# Dev builds link the prebuilt libduckdb dynamically (release wheels bundle it).
+DUCKDB_LIB = $$(ls -d $(CURDIR)/target/duckdb-download/*/* | tail -1)
+
 test-python: build ## Run Python tests (builds release extension first)
-	python -m pytest tests/python -v
+	LD_LIBRARY_PATH=$(DUCKDB_LIB) DYLD_LIBRARY_PATH=$(DUCKDB_LIB) python -m pytest tests/python -v
 
 lint: fmt-check clippy ruff-check mypy ## Run all linters
 
