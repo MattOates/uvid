@@ -70,7 +70,7 @@ pub fn encode_base(base: u8) -> Option<u8> {
 /// Only the lowest 2 bits of `bits` are considered.
 #[inline]
 pub fn decode_base(bits: u8) -> u8 {
-    const LOOKUP: [u8; 4] = [b'A', b'C', b'G', b'T'];
+    const LOOKUP: [u8; 4] = *b"ACGT";
     LOOKUP[(bits & 0b11) as usize]
 }
 
