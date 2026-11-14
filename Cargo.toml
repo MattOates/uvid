@@ -11,7 +11,7 @@ name = "uvid"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.28", features = ["extension-module"] }
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py310"] }
 noodles = { version = "0.108", features = ["vcf", "bgzf", "core", "fasta"] }
 twobit = "0.2"
 sysdirs = "0.9"
