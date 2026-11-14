@@ -69,8 +69,11 @@ jobs:
       - name: Smoke test the wheel in a clean environment
         shell: bash
         run: |
-          uv run --isolated --no-project --python 3.11 --with "$(ls dist/*.whl | head -1)" \
-            python -c "import uvid; print(uvid.Collection(':memory:').list_samples())"
+          # One abi3 wheel serves every supported Python; check the oldest and newest.
+          for py in 3.10 3.13; do
+            uv run --isolated --no-project --python $py --with "$(ls dist/*.whl | head -1)" \
+              python -c "import sys, uvid; print(sys.version_info[:2], uvid.Collection(':memory:').list_samples())"
+          done
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
