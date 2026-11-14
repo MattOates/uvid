@@ -95,7 +95,7 @@ impl UvidStore {
         // Create sites table
         self.conn.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS \"{}\" (
-                uvid HUGEINT PRIMARY KEY,
+                uvid UHUGEINT PRIMARY KEY,
                 qual FLOAT,
                 filter VARCHAR,
                 info JSON,
@@ -111,7 +111,7 @@ impl UvidStore {
             let staging = format!("{}_staging", sites_table);
             self.conn.execute_batch(&format!(
                 "CREATE TEMPORARY TABLE \"{}\" (
-                    uvid HUGEINT,
+                    uvid UHUGEINT,
                     qual FLOAT,
                     filter VARCHAR,
                     info JSON,
@@ -122,11 +122,9 @@ impl UvidStore {
 
             let mut appender = self.conn.appender(&staging)?;
             for site in &parsed.sites {
-                // Store as HUGEINT (i128) via bit-reinterpretation; roundtrips exactly.
-                let uvid_i128 = site.uvid.as_u128() as i128;
                 let info_str = site.info.to_string();
                 appender.append_row(params![
-                    uvid_i128,
+                    site.uvid.as_u128(),
                     site.qual,
                     site.filter,
                     info_str,
@@ -163,7 +161,7 @@ impl UvidStore {
 
             self.conn.execute_batch(&format!(
                 "CREATE TABLE IF NOT EXISTS \"{}\" (
-                    uvid HUGEINT PRIMARY KEY,
+                    uvid UHUGEINT PRIMARY KEY,
                     allele1 UTINYINT,
                     allele2 UTINYINT,
                     phased BOOLEAN,
@@ -179,7 +177,7 @@ impl UvidStore {
                 let staging = format!("{}_staging", sample_table);
                 self.conn.execute_batch(&format!(
                     "CREATE TEMPORARY TABLE \"{}\" (
-                        uvid HUGEINT,
+                        uvid UHUGEINT,
                         allele1 UTINYINT,
                         allele2 UTINYINT,
                         phased BOOLEAN,
@@ -192,15 +190,13 @@ impl UvidStore {
 
                 let mut appender = self.conn.appender(&staging)?;
                 for record in &parsed.samples[sample_idx] {
-                    // Store as HUGEINT (i128) via bit-reinterpretation; roundtrips exactly.
-                    let uvid_i128 = record.uvid.as_u128() as i128;
                     let format_extra_str = if record.format_extra.is_null() {
                         None
                     } else {
                         Some(record.format_extra.to_string())
                     };
                     appender.append_row(params![
-                        uvid_i128,
+                        record.uvid.as_u128(),
                         record.allele1,
                         record.allele2,
                         record.phased,
@@ -289,10 +285,7 @@ impl UvidStore {
         let (lower, upper) = Uvid128::range(chr, start_pos, end_pos, assembly)
             .ok_or("Invalid chromosome or position for range query")?;
 
-        // Bounds share the same chromosome bits so they have the same sign
-        // as i128; BETWEEN therefore works correctly on a HUGEINT column.
-        let lower_i128 = lower.as_u128() as i128;
-        let upper_i128 = upper.as_u128() as i128;
+        let (lower, upper) = (lower.as_u128(), upper.as_u128());
 
         let is_sites_table = table_name.ends_with("__sites");
 
@@ -307,8 +300,8 @@ impl UvidStore {
             );
 
             let mut stmt = self.conn.prepare(&query)?;
-            let rows = stmt.query_map(params![lower_i128, upper_i128], |row| {
-                let uvid_u128 = row.get::<_, i128>(0)? as u128;
+            let rows = stmt.query_map(params![lower, upper], |row| {
+                let uvid_u128 = row.get::<_, u128>(0)?;
                 Ok(SearchResult {
                     uvid: Uvid128::from_u128(uvid_u128),
                     allele1: None,
@@ -350,8 +343,8 @@ impl UvidStore {
             );
 
             let mut stmt = self.conn.prepare(&query)?;
-            let rows = stmt.query_map(params![lower_i128, upper_i128], |row| {
-                let uvid_u128 = row.get::<_, i128>(0)? as u128;
+            let rows = stmt.query_map(params![lower, upper], |row| {
+                let uvid_u128 = row.get::<_, u128>(0)?;
                 Ok(SearchResult {
                     uvid: Uvid128::from_u128(uvid_u128),
                     allele1: row.get(1)?,
@@ -433,6 +426,70 @@ mod tests {
         let store = UvidStore::open_in_memory().unwrap();
         let samples = store.list_samples().unwrap();
         assert!(samples.is_empty());
+    }
+
+    /// UVIDs with bit 127 set (chrM) must roundtrip and sort after chr1
+    /// in SQL, i.e. the column is genuinely unsigned.
+    #[test]
+    fn test_uhugeint_roundtrip_and_order() {
+        use crate::assembly::{Assembly, ChrIndex};
+        use crate::vcf::{SampleRecord, SiteRecord};
+
+        let chr1 = Uvid128::encode(ChrIndex(0), 1, b"T", b"A", Assembly::GRCh38).unwrap();
+        let chr_m = Uvid128::encode(ChrIndex(24), 1, b"A", b"G", Assembly::GRCh38).unwrap();
+        assert_eq!(chr_m.as_u128() >> 127, 1);
+
+        let uvids = [chr_m, chr1];
+        let parsed = ParsedVcf {
+            sample_names: vec!["s".into()],
+            sites: uvids
+                .iter()
+                .map(|&uvid| SiteRecord {
+                    uvid,
+                    qual: None,
+                    filter: "PASS".into(),
+                    info: Value::Null,
+                    multiallelic: false,
+                })
+                .collect(),
+            samples: vec![uvids
+                .iter()
+                .map(|&uvid| SampleRecord {
+                    uvid,
+                    allele1: Some(0),
+                    allele2: Some(1),
+                    phased: false,
+                    dp: None,
+                    gq: None,
+                    format_extra: Value::Null,
+                })
+                .collect()],
+            raw_header: String::new(),
+            info_definitions: Value::Null,
+            format_definitions: Value::Null,
+            contigs: Value::Null,
+        };
+        let store = UvidStore::open_in_memory().unwrap();
+        store.add_vcf("t", &parsed).unwrap();
+
+        let mut stmt = store
+            .conn
+            .prepare("SELECT uvid FROM \"t__sites\" ORDER BY uvid")
+            .unwrap();
+        let sorted: Vec<u128> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(sorted, [chr1.as_u128(), chr_m.as_u128()]);
+
+        for table in ["t__sites", "t__s"] {
+            let hits = store
+                .search_region(table, ChrIndex(24), 1, 10, Assembly::GRCh38)
+                .unwrap();
+            assert_eq!(hits.len(), 1, "{table}");
+            assert_eq!(hits[0].uvid, chr_m, "{table}");
+        }
     }
 
     #[test]
