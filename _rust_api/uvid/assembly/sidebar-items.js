@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CHROMOSOME_NAMES","GRCH37_CHROMOSOMES","GRCH37_OFFSETS","GRCH38_CHROMOSOMES","GRCH38_OFFSETS","UCSC_CHROMOSOME_NAMES"],"enum":["Assembly","ContigScheme"],"fn":["chr_pos_to_linear","chromosomes","classify_chrom","detect_contig_scheme","linear_to_chr_pos","offsets","validate_position"],"struct":["ChrIndex","ChromosomeInfo"]};

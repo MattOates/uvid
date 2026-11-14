@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["algorithm","data","error","reference","types"]};

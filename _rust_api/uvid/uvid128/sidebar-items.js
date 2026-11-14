@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["UVID_NAMESPACE"],"struct":["Uvid128","Variant"]};

@@ -1,0 +1,2 @@
+createSrcSidebar('[["uvid",["",[["normalize",[],["algorithm.rs","data.rs","error.rs","mod.rs","reference.rs","types.rs"]]],["allele_pack.rs","assembly.rs","hgvs.rs","lib.rs","store.rs","uvid128.rs","vcf.rs","vcf_passthrough.rs"]]]]');
+//{"start":19,"fragment_lengths":[211]}

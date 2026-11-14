@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CoordinateSystem","HgvsError","NaEdit"],"fn":["detect_assembly","hgvs_to_uvid","parse","uvid_to_hgvs"],"struct":["FormatOptions","HgvsVariant"]};
