@@ -60,11 +60,13 @@ jobs:
 
   # ── Python tests ───────────────────────────────────────────────────
   # Build the native extension (with DuckDB) and run pytest.
-  # Ubuntu only — the Python wrapper is platform-independent, and
-  # native correctness is covered by the Rust test suites above.
   python-tests:
-    name: Python tests
-    runs-on: ubuntu-latest
+    name: Python tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -80,6 +82,10 @@ jobs:
       - name: Run Python tests
         # The extension links the prebuilt libduckdb dynamically; release
         # wheels bundle it, a dev build has to be pointed at it.
+        shell: bash
         run: |
-          export LD_LIBRARY_PATH=$(ls -d "$PWD"/target/duckdb-download/*/* | tail -1)
+          lib=$(ls -d "$PWD"/target/duckdb-download/*/* | tail -1)
+          export LD_LIBRARY_PATH=$lib
+          # Windows loads an extension module's DLLs from beside it, not from PATH.
+          if [ "$RUNNER_OS" = Windows ]; then cp "$lib/duckdb.dll" python/uvid/; fi
           uv run python -m pytest tests/python -v
